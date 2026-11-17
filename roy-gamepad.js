@@ -1,5 +1,5 @@
-// Virtual On-Screen Touch Gamepad for Roy-Игры Player
-// Multi-touch D-pad (Arrows / WASD toggle) + A (Space) / B (Enter) buttons.
+// Virtual On-Screen Touch Gamepad for Roy-Игры Player (v6.2)
+// Multi-touch D-pad / Analog 360° Stick (Arrows / WASD toggle) + A/B + up to 4 Extra Action Buttons.
 
 const KEY_DEFS = {
   ArrowLeft: { code: 'ArrowLeft', key: 'ArrowLeft', keyCode: 37 },
@@ -11,8 +11,19 @@ const KEY_DEFS = {
   KeyW: { code: 'KeyW', key: 'w', keyCode: 87 },
   KeyS: { code: 'KeyS', key: 's', keyCode: 83 },
   KeyE: { code: 'KeyE', key: 'e', keyCode: 69 },
+  KeyF: { code: 'KeyF', key: 'f', keyCode: 70 },
   KeyQ: { code: 'KeyQ', key: 'q', keyCode: 81 },
+  KeyR: { code: 'KeyR', key: 'r', keyCode: 82 },
+  KeyZ: { code: 'KeyZ', key: 'z', keyCode: 90 },
+  KeyX: { code: 'KeyX', key: 'x', keyCode: 88 },
+  KeyC: { code: 'KeyC', key: 'c', keyCode: 67 },
+  Digit1: { code: 'Digit1', key: '1', keyCode: 49 },
+  Digit2: { code: 'Digit2', key: '2', keyCode: 50 },
+  Digit3: { code: 'Digit3', key: '3', keyCode: 51 },
+  Digit4: { code: 'Digit4', key: '4', keyCode: 52 },
+  Tab: { code: 'Tab', key: 'Tab', keyCode: 9 },
   ShiftLeft: { code: 'ShiftLeft', key: 'Shift', keyCode: 16 },
+  ShiftRight: { code: 'ShiftRight', key: 'Shift', keyCode: 16 },
   Space: { code: 'Space', key: ' ', keyCode: 32 },
   Enter: { code: 'Enter', key: 'Enter', keyCode: 13 }
 };
@@ -206,6 +217,7 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
       const code = resolveDirCode(btn.getAttribute('data-pad-dir'));
       if (!code) return;
       try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+      try { if (navigator && typeof navigator.vibrate === 'function') navigator.vibrate(10); } catch (_) {}
       const prev = activePointers.get(e.pointerId);
       if (prev && prev !== code) setLogicalPressed(prev, false);
       if (prev !== code) {
@@ -264,7 +276,7 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
       ${leftHtml}
       <div class="roy-gamepad-cluster roy-gamepad-actions">
         <button type="button" class="roy-pad-mode-pill" data-pad-mode-toggle title="Переключить Стрелки / WASD">${useWasd ? 'WASD' : 'Стрелки'}</button>
-        ${extraButtons.length > 0 ? `<div style="display:flex; gap:8px; justify-content:flex-end;">${extraButtons.map(b => `<button type="button" class="roy-pad-btn roy-pad-action" style="width:42px;height:42px;font-size:12px;" data-pad-dir="extra:${esc(b.code)}" aria-label="${esc(b.code)}">${esc(b.label)}</button>`).join('')}</div>` : ''}
+        ${extraButtons.length > 0 ? `<div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">${extraButtons.map(b => `<button type="button" class="roy-pad-btn roy-pad-action" style="width:42px;height:42px;font-size:11px;" data-pad-dir="extra:${esc(b.code)}" aria-label="${esc(b.code)}">${esc(b.label)}</button>`).join('')}</div>` : ''}
         <div style="display:flex; gap:12px; align-items:flex-end;">
           <button type="button" class="roy-pad-btn roy-pad-action roy-pad-b" data-pad-dir="b" aria-label="Enter">B</button>
           <button type="button" class="roy-pad-btn roy-pad-action roy-pad-a" data-pad-dir="a" aria-label="Space">A</button>
@@ -279,14 +291,14 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
     if (typeof cfg.wasd === 'boolean') useWasd = cfg.wasd;
     if (typeof cfg.stick === 'boolean') useStick = cfg.stick;
     if (Array.isArray(cfg.extras)) {
-      extraButtons = cfg.extras.slice(0, 3).map(item => {
+      extraButtons = cfg.extras.slice(0, 4).map(item => {
         if (typeof item === 'string') {
           if (!KEY_DEFS[item]) KEY_DEFS[item] = { code: item, key: item.replace(/^Key/, '').toLowerCase(), keyCode: 0 };
           return { code: item, label: item.replace(/^Key|^Shift/, '').slice(0, 3).toUpperCase() };
         }
-        const code = String(item.code || 'KeyE');
+        const code = String(item.code || item.key || 'KeyE');
         if (!KEY_DEFS[code]) KEY_DEFS[code] = { code, key: item.key || code.replace(/^Key/, '').toLowerCase(), keyCode: 0 };
-        return { code, label: String(item.label || code).slice(0, 4) };
+        return { code, label: String(item.label || code).slice(0, 5) };
       });
     }
     const overlay = typeof getOverlayEl === 'function' ? getOverlayEl() : null;
