@@ -29,7 +29,7 @@ async function _royEnsureJSZip() {
 
 export const RoyLang = (function() {
   const KEYWORDS = new Set([
-    'game', 'entity', 'class', 'enum', 'spawn', 'new', 'this', 'self',
+    'game', 'entity', 'class', 'extends', 'super', 'delete', 'enum', 'spawn', 'new', 'this', 'self',
     'var', 'let', 'const', 'fn', 'return', 'if', 'elif', 'else', 'match',
     'while', 'for', 'in', 'repeat', 'break', 'continue',
     'on', 'after', 'every', 'import', 'export',
@@ -418,13 +418,44 @@ export const RoyLang = (function() {
         if (!isVal('PUNC', ')')) {
           do {
             const isRest = !!match('OP', '...');
-            const pTok = expect('IDENT', undefined, 'Ожидалось имя параметра');
-            let defVal = null;
-            if (!isRest && match('OP', '=')) {
-              defVal = parseExpression();
+            if (!isRest && match('PUNC', '{')) {
+              const props = [];
+              while (!isVal('PUNC', '}') && !atEnd()) {
+                const kTok = expect('IDENT', undefined, 'Ожидалось имя свойства в параметре { ... }');
+                let alias = kTok.value;
+                if (match('PUNC', ':')) alias = expect('IDENT', undefined, 'Ожидалось имя после ":"').value;
+                let defVal = null;
+                if (match('OP', '=')) defVal = parseExpression();
+                props.push({ key: kTok.value, alias, defVal });
+                if (!match('PUNC', ',')) break;
+              }
+              expect('PUNC', '}', 'Ожидалась "}" в параметре');
+              let objDef = null;
+              if (match('OP', '=')) objDef = parseExpression();
+              params.push({ pattern: { type: 'ObjectPat', props }, defVal: objDef, rest: false });
+            } else if (!isRest && match('PUNC', '[')) {
+              const elements = [];
+              while (!isVal('PUNC', ']') && !atEnd()) {
+                const eRest = !!match('OP', '...');
+                const nTok = expect('IDENT', undefined, 'Ожидалось имя в параметре [ ... ]');
+                let defVal = null;
+                if (!eRest && match('OP', '=')) defVal = parseExpression();
+                elements.push({ name: nTok.value, rest: eRest, defVal });
+                if (!match('PUNC', ',') || eRest) break;
+              }
+              expect('PUNC', ']', 'Ожидалась "]" в параметре');
+              let arrDef = null;
+              if (match('OP', '=')) arrDef = parseExpression();
+              params.push({ pattern: { type: 'ArrayPat', elements }, defVal: arrDef, rest: false });
+            } else {
+              const pTok = expect('IDENT', undefined, 'Ожидалось имя параметра');
+              let defVal = null;
+              if (!isRest && match('OP', '=')) {
+                defVal = parseExpression();
+              }
+              params.push({ name: pTok.value, defVal, rest: isRest });
+              if (isRest) break;
             }
-            params.push({ name: pTok.value, defVal, rest: isRest });
-            if (isRest) break;
           } while (match('PUNC', ','));
         }
         expect('PUNC', ')', 'Ожидалась ")" после списка параметров');
@@ -463,6 +494,15 @@ export const RoyLang = (function() {
           if (t.value === 'for') return parseFor();
           if (t.value === 'repeat') return parseRepeat();
           if (t.value === 'return') return parseReturn();
+          if (t.value === 'delete') {
+            pos++;
+            const target = parsePostfix();
+            if (target.type !== 'Member' && target.type !== 'Index') {
+              throw compileError('Ожидалось поле объекта (delete obj.key или delete obj[k])', t.line, t.col, fileName);
+            }
+            match('PUNC', ';');
+            return { type: 'DeleteStmt', target, line: t.line, col: t.col };
+          }
           if (t.value === 'break') { pos++; match('PUNC', ';'); return { type: 'Break', line: t.line, col: t.col }; }
           if (t.value === 'continue') { pos++; match('PUNC', ';'); return { type: 'Continue', line: t.line, col: t.col }; }
         }
@@ -537,9 +577,14 @@ export const RoyLang = (function() {
 
       function parseEntityDecl() {
         const kw = expect('KW');
-        const nameTok = expect('IDENT', undefined, 'Ожидалось имя сущности (entity)');
+        const isClass = kw.value === 'class';
+        const nameTok = expect('IDENT', undefined, `Ожидалось имя ${isClass ? 'класса (class)' : 'сущности (entity)'}`);
         const ctorParams = isVal('PUNC', '(') ? parseParamDefs(true) : [];
-        expect('PUNC', '{', 'Ожидалась "{" после объявления entity');
+        let superName = null;
+        if (match('KW', 'extends')) {
+          superName = expect('IDENT', undefined, 'Ожидалось имя родительского класса после extends').value;
+        }
+        expect('PUNC', '{', `Ожидалась "{" после объявления ${isClass ? 'class' : 'entity'}`);
         const fields = [];
         const methods = [];
         let initMethod = null;
@@ -553,7 +598,7 @@ export const RoyLang = (function() {
             else methods.push(m);
           } else if (isVal('KW', 'let') || isVal('KW', 'var') || isVal('KW', 'const')) {
             const vd = parseVarDecl();
-            if (!vd.name) throw compileError('Внутри entity поля должны иметь простые имена', vd.line, vd.col, fileName);
+            if (!vd.name) throw compileError(`Внутри ${isClass ? 'class' : 'entity'} поля должны иметь простые имена`, vd.line, vd.col, fileName);
             fields.push({ name: vd.name, init: vd.init, line: vd.line, col: vd.col });
           } else if (nt.type === 'IDENT' && (peek(1).value === '=' || peek(1).value === ':')) {
             const fTok = nt; pos++;
@@ -562,11 +607,11 @@ export const RoyLang = (function() {
             match('PUNC', ';'); match('PUNC', ',');
             fields.push({ name: fTok.value, init: fVal, line: fTok.line, col: fTok.col });
           } else {
-            throw compileError(`Внутри entity ожидались поля или методы fn (...), встречено "${nt.value || nt.type}"`, nt.line, nt.col, fileName);
+            throw compileError(`Внутри ${isClass ? 'class' : 'entity'} ожидались поля или методы fn (...), встречено "${nt.value || nt.type}"`, nt.line, nt.col, fileName);
           }
         }
-        expect('PUNC', '}', 'Ожидалась "}" в конце entity');
-        return { type: 'EntityDecl', name: nameTok.value, ctorParams, fields, methods, initMethod, line: kw.line, col: kw.col };
+        expect('PUNC', '}', `Ожидалась "}" в конце ${isClass ? 'class' : 'entity'}`);
+        return { type: isClass ? 'ClassDecl' : 'EntityDecl', name: nameTok.value, ctorParams, superName, fields, methods, initMethod, line: kw.line, col: kw.col };
       }
 
       function parseEnumDecl() {
@@ -954,18 +999,20 @@ export const RoyLang = (function() {
       function isParenArrowAhead() {
         if (!isVal('PUNC', '(')) return false;
         let off = 1;
-        while (true) {
+        let pDepth = 1;
+        while (off < 80) {
           const tk = peek(off);
-          if (tk.type === 'EOF') return false;
-          if (tk.type === 'PUNC' && tk.value === ')') {
-            return peek(off + 1).type === 'OP' && peek(off + 1).value === '=>';
+          if (tk.type === 'EOF' || (tk.type === 'PUNC' && tk.value === ';')) return false;
+          if (tk.type === 'PUNC' && tk.value === '(') pDepth++;
+          else if (tk.type === 'PUNC' && tk.value === ')') {
+            pDepth--;
+            if (pDepth === 0) {
+              return peek(off + 1).type === 'OP' && peek(off + 1).value === '=>';
+            }
           }
-          if (tk.type === 'IDENT' || (tk.type === 'PUNC' && tk.value === ',')) {
-            off++;
-            continue;
-          }
-          return false;
+          off++;
         }
+        return false;
       }
 
       function parseArrowBody() {
@@ -1003,6 +1050,7 @@ export const RoyLang = (function() {
           if (t.value === 'false') { pos++; return { type: 'Literal', value: false, line: t.line, col: t.col }; }
           if (t.value === 'null') { pos++; return { type: 'Literal', value: null, line: t.line, col: t.col }; }
           if (t.value === 'game') { pos++; return { type: 'Ident', name: 'game', line: t.line, col: t.col }; }
+          if (t.value === 'super') { pos++; return { type: 'Ident', name: 'super', line: t.line, col: t.col }; }
           if (t.value === 'this' || t.value === 'self') { pos++; return { type: 'Ident', name: 'this', line: t.line, col: t.col }; }
           if (t.value === 'match') return parseMatch(true);
           if (t.value === 'fn') {
@@ -1058,6 +1106,15 @@ export const RoyLang = (function() {
             if (match('OP', '...')) {
               const sArg = parseExpression();
               entries.push({ spread: true, val: sArg });
+              match('PUNC', ',');
+              continue;
+            }
+            if (match('PUNC', '[')) {
+              const kExpr = parseExpression();
+              expect('PUNC', ']', 'Ожидалась "]" после вычисляемого ключа объекта');
+              expect('PUNC', ':', 'Ожидалось ":" после ключа объекта');
+              const val = parseExpression();
+              entries.push({ computed: true, keyExpr: kExpr, val });
               match('PUNC', ',');
               continue;
             }
@@ -1145,22 +1202,26 @@ export const RoyLang = (function() {
       height: 500,
       bg: '#090d16',
       fps: 60,
-      pixelated: false
+      pixelated: false,
+      scaleMode: 'fit',
+      gamepad: null
     };
 
     if (ast.gameHeader) {
       if (ast.gameHeader.title) meta.title = ast.gameHeader.title;
       const p = ast.gameHeader.props || {};
       if (p.title && p.title.type === 'Literal') meta.title = String(p.title.value);
-      if (p.width && p.width.type === 'Literal' && Number(p.width.value) >= 120) meta.width = Math.min(2048, Number(p.width.value));
-      if (p.height && p.height.type === 'Literal' && Number(p.height.value) >= 120) meta.height = Math.min(2048, Number(p.height.value));
+      if (p.width && p.width.type === 'Literal' && Number(p.width.value) >= 120) meta.width = Math.min(4096, Number(p.width.value));
+      if (p.height && p.height.type === 'Literal' && Number(p.height.value) >= 120) meta.height = Math.min(4096, Number(p.height.value));
       if (p.size && p.size.type === 'SizeLiteral') {
-        meta.width = Math.max(120, Math.min(2048, p.size.width));
-        meta.height = Math.max(120, Math.min(2048, p.size.height));
+        meta.width = Math.max(120, Math.min(4096, p.size.width));
+        meta.height = Math.max(120, Math.min(4096, p.size.height));
       }
       if (p.bg && p.bg.type === 'Literal') meta.bg = String(p.bg.value);
       if (p.fps && p.fps.type === 'Literal' && Number(p.fps.value) > 0) meta.fps = Math.max(10, Math.min(120, Number(p.fps.value)));
       if (p.pixelated && p.pixelated.type === 'Literal') meta.pixelated = !!p.pixelated.value;
+      if (p.scale && p.scale.type === 'Literal') meta.scaleMode = String(p.scale.value).toLowerCase();
+      if (p.gamepad && p.gamepad.type === 'Literal') meta.gamepad = !!p.gamepad.value;
     }
 
     const asyncFnNames = new Set();
@@ -1212,12 +1273,47 @@ export const RoyLang = (function() {
       return ASYNC_ROOTS.has(name) || ASYNC_MEMBERS.has(name) || asyncFnNames.has(name);
     }
 
+    let curFile = ast.fileName || 'main.roy';
+    const warnings = [];
+    function lintWalk(node, fName) {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'ModuleScope') {
+        const mf = node.fileName || fName;
+        (node.body || []).forEach(s => lintWalk(s, mf));
+        return;
+      }
+      if (node.type === 'Call') {
+        const cn = calleeChainName(node.callee);
+        if (cn === 'random' || cn === 'randomInt') {
+          warnings.push(`[${fName}:${node.line}] В RoyLang используй rand()/randInt() вместо ${cn}()`);
+        }
+        if (cn === 'textStroke' && node.args && node.args[3] && node.args[3].type === 'Literal' && typeof node.args[3].value === 'number') {
+          warnings.push(`[${fName}:${node.line}] В textStroke 4-й аргумент — цвет текста, а size идёт 6-м`);
+        }
+      }
+      for (const k of Object.keys(node)) {
+        const v = node[k];
+        if (Array.isArray(v)) v.forEach(item => lintWalk(item, fName));
+        else if (v && typeof v === 'object' && v.type) lintWalk(v, fName);
+      }
+    }
+    lintWalk(ast, curFile);
+
     let seq = 0;
     const nextTmp = (p) => `__roy_${p}_${++seq}`;
 
     function emitParams(params) {
       return (params || []).map(p => {
         if (typeof p === 'string') return p;
+        if (p.pattern) {
+          let patStr = '';
+          if (p.pattern.type === 'ObjectPat') {
+            patStr = `{ ${p.pattern.props.map(pr => `${pr.key}: ${pr.alias}${pr.defVal ? ` = ${emitExpr(pr.defVal)}` : ''}`).join(', ')} }`;
+          } else {
+            patStr = `[${p.pattern.elements.map(el => el.rest ? `...${el.name}` : (el.defVal ? `${el.name} = ${emitExpr(el.defVal)}` : el.name)).join(', ')}]`;
+          }
+          return p.defVal ? `${patStr} = ${emitExpr(p.defVal)}` : patStr;
+        }
         if (p.rest) return `...${p.name}`;
         return p.defVal ? `${p.name} = ${emitExpr(p.defVal)}` : p.name;
       }).join(', ');
@@ -1275,7 +1371,7 @@ export const RoyLang = (function() {
         }
         case 'ArrayLit': return `[${node.items.map(x => emitExpr(x)).join(', ')}]`;
         case 'ObjectLit':
-          return `({ ${node.entries.map(e => e.spread ? `...(${emitExpr(e.val)})` : `${JSON.stringify(e.key)}: ${emitExpr(e.val)}`).join(', ')} })`;
+          return `({ ${node.entries.map(e => e.spread ? `...(${emitExpr(e.val)})` : (e.computed ? `[${emitExpr(e.keyExpr)}]: ${emitExpr(e.val)}` : `${JSON.stringify(e.key)}: ${emitExpr(e.val)}`)).join(', ')} })`;
         case 'Member': return `${emitExpr(node.obj)}[${JSON.stringify(node.prop)}]`;
         case 'OptMember': return `${emitExpr(node.obj)}?.[${JSON.stringify(node.prop)}]`;
         case 'Index': return `${emitExpr(node.obj)}[${emitExpr(node.index)}]`;
@@ -1304,8 +1400,14 @@ export const RoyLang = (function() {
       }
     }
 
+    function locTag(s) {
+      if (!s || !s.line) return '';
+      if (s.type === 'ModuleScope' || s.type === 'ImportBinding' || s.type === 'EnumDecl' || s.type === 'FnDecl' || s.type === 'ClassDecl' || s.type === 'EntityDecl') return '';
+      return `__rt._loc = ${JSON.stringify(curFile + ':' + s.line)}; `;
+    }
+
     function emitBlock(blockNode) {
-      return `{\n${blockNode.stmts.map(s => emitStmt(s)).join('\n')}\n}`;
+      return `{\n${blockNode.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')}\n}`;
     }
 
     function emitStmt(node) {
@@ -1313,7 +1415,10 @@ export const RoyLang = (function() {
       switch (node.type) {
         case 'Block': return emitBlock(node);
         case 'ModuleScope': {
+          const prevF = curFile;
+          if (node.fileName) curFile = node.fileName;
           const innerCode = node.body.map(s => emitStmt(s)).join('\n');
+          curFile = prevF;
           const expObj = `{ ${node.exportsList.map(n => `${JSON.stringify(n)}: ${n}`).join(', ')} }`;
           const hasAsyncMod = node.body.some(s => astHasAwait(s));
           const fnWrap = hasAsyncMod
@@ -1360,11 +1465,13 @@ export const RoyLang = (function() {
           }).join(', ');
           return `const ${node.name} = Object.freeze({ ${propsOut} });`;
         }
-        case 'EntityDecl': {
+        case 'ClassDecl': {
           const ctorParamList = emitParams(node.ctorParams);
-          const assignParams = node.ctorParams.map(p => `this[${JSON.stringify(p.name)}] = ${p.name};`).join(' ');
+          const superArgs = node.ctorParams.filter(p => p.name && !p.rest).map(p => p.name).join(', ');
+          const superStmt = node.superName ? `super(${superArgs}); ` : '';
+          const assignParams = node.ctorParams.filter(p => p.name).map(p => `this[${JSON.stringify(p.name)}] = ${p.name};`).join(' ');
           const fieldInits = node.fields.map(f => `this[${JSON.stringify(f.name)}] = ${f.init ? emitExpr(f.init) : 'null'};`).join(' ');
-          const initCall = node.initMethod ? `this.init(${node.ctorParams.map(p => p.name).join(', ')});` : '';
+          const initCall = node.initMethod ? `this.init(${superArgs});` : '';
           const methodsOut = [];
           if (node.initMethod) {
             methodsOut.push(`init(${emitParams(node.initMethod.params)}) ${emitBlock(node.initMethod.body)}`);
@@ -1373,17 +1480,38 @@ export const RoyLang = (function() {
             const mAsync = astHasAwait(m.body);
             methodsOut.push(`${mAsync ? 'async ' : ''}${m.name}(${emitParams(m.params)}) ${emitBlock(m.body)}`);
           });
-          return `class ${node.name} extends __rt.BaseEntity {\nconstructor(${ctorParamList}) {\nsuper(${JSON.stringify(node.name)});\n${assignParams}\n${fieldInits}\n${initCall}\n}\n${methodsOut.join('\n')}\n}`;
+          const extClause = node.superName ? ` extends ${node.superName}` : '';
+          return `class ${node.name}${extClause} {\nconstructor(${ctorParamList}) {\n${superStmt}${assignParams}\n${fieldInits}\n${initCall}\n}\n${methodsOut.join('\n')}\n}`;
+        }
+        case 'EntityDecl': {
+          const ctorParamList = emitParams(node.ctorParams);
+          const superArgs = node.ctorParams.filter(p => p.name && !p.rest).map(p => p.name).join(', ');
+          const baseName = node.superName || '__rt.BaseEntity';
+          const superCall = node.superName ? `super(${superArgs}); this.tag = ${JSON.stringify(node.name)};` : `super(${JSON.stringify(node.name)});`;
+          const assignParams = node.ctorParams.filter(p => p.name).map(p => `this[${JSON.stringify(p.name)}] = ${p.name};`).join(' ');
+          const fieldInits = node.fields.map(f => `this[${JSON.stringify(f.name)}] = ${f.init ? emitExpr(f.init) : 'null'};`).join(' ');
+          const initCall = node.initMethod ? `this.init(${superArgs});` : '';
+          const methodsOut = [];
+          if (node.initMethod) {
+            methodsOut.push(`init(${emitParams(node.initMethod.params)}) ${emitBlock(node.initMethod.body)}`);
+          }
+          node.methods.forEach(m => {
+            const mAsync = astHasAwait(m.body);
+            methodsOut.push(`${mAsync ? 'async ' : ''}${m.name}(${emitParams(m.params)}) ${emitBlock(m.body)}`);
+          });
+          return `class ${node.name} extends ${baseName} {\nconstructor(${ctorParamList}) {\n${superCall}\n${assignParams}\n${fieldInits}\n${initCall}\n}\n${methodsOut.join('\n')}\n}`;
         }
         case 'OnHook': {
           const isAsync = astHasAwait(node.body);
-          const evKey = (node.event === 'enter' || node.event === 'exit') && node.sceneFilter
-            ? `${node.event}:${node.sceneFilter}`
-            : node.event;
-          const filterGuard = (node.sceneFilter && node.event !== 'enter' && node.event !== 'exit')
+          let normEv = node.event;
+          if (normEv === 'drawui' || normEv === 'draw_ui') normEv = 'drawUi';
+          const evKey = (normEv === 'enter' || normEv === 'exit') && node.sceneFilter
+            ? `${normEv}:${node.sceneFilter}`
+            : normEv;
+          const filterGuard = (node.sceneFilter && normEv !== 'enter' && normEv !== 'exit')
             ? `if (__rt.scene.name !== ${JSON.stringify(node.sceneFilter)}) return;\n`
             : '';
-          const bodyJs = `{\n${filterGuard}${node.body.stmts.map(s => emitStmt(s)).join('\n')}\n}`;
+          const bodyJs = `{\n${filterGuard}${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')}\n}`;
           return `__rt.on(${JSON.stringify(evKey)}, ${isAsync ? 'async ' : ''}function(${emitParams(node.params)}) ${bodyJs});`;
         }
         case 'AfterHook': {
@@ -1404,25 +1532,26 @@ export const RoyLang = (function() {
         case 'MatchStmt':
           return emitMatchBody(node, false);
         case 'While':
-          return `while (${emitExpr(node.cond)}) { __royLoopTick(); ${node.body.stmts.map(s => emitStmt(s)).join('\n')} }`;
+          return `while (${emitExpr(node.cond)}) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} }`;
         case 'ForRange': {
           const eVar = nextTmp('end');
           const cmp = node.inclusive ? '<=' : '<';
-          return `{ const ${eVar} = ${emitExpr(node.end)}; for (let ${node.varName} = ${emitExpr(node.start)}; ${node.varName} ${cmp} ${eVar}; ${node.varName}++) { __royLoopTick(); ${node.body.stmts.map(s => emitStmt(s)).join('\n')} } }`;
+          return `{ const ${eVar} = ${emitExpr(node.end)}; for (let ${node.varName} = ${emitExpr(node.start)}; ${node.varName} ${cmp} ${eVar}; ${node.varName}++) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'ForEach': {
           const colVar = nextTmp('col');
-          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterList = Array.isArray(${colVar}) ? ${colVar} : (${colVar} && typeof ${colVar} === 'object' ? Object.keys(${colVar}) : []); for (const ${node.varName} of __iterList) { __royLoopTick(); ${node.body.stmts.map(s => emitStmt(s)).join('\n')} } }`;
+          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterList = Array.isArray(${colVar}) ? ${colVar} : (${colVar} && typeof ${colVar} === 'object' ? Object.keys(${colVar}) : []); for (const ${node.varName} of __iterList) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'ForEntries': {
           const colVar = nextTmp('col');
-          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterEnt = Array.isArray(${colVar}) ? ${colVar}.map((__v, __i) => [__i, __v]) : (${colVar} && typeof ${colVar} === 'object' ? Object.entries(${colVar}) : []); for (const [${node.keyName}, ${node.valName}] of __iterEnt) { __royLoopTick(); ${node.body.stmts.map(s => emitStmt(s)).join('\n')} } }`;
+          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterEnt = Array.isArray(${colVar}) ? ${colVar}.map((__v, __i) => [__i, __v]) : (${colVar} && typeof ${colVar} === 'object' ? Object.entries(${colVar}) : []); for (const [${node.keyName}, ${node.valName}] of __iterEnt) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'Repeat': {
           const cntVar = nextTmp('rep');
           const idxVar = nextTmp('i');
-          return `{ const ${cntVar} = Math.max(0, Math.floor(${emitExpr(node.countExpr)})); for (let ${idxVar} = 0; ${idxVar} < ${cntVar}; ${idxVar}++) { __royLoopTick(); ${node.body.stmts.map(s => emitStmt(s)).join('\n')} } }`;
+          return `{ const ${cntVar} = Math.max(0, Math.floor(${emitExpr(node.countExpr)})); for (let ${idxVar} = 0; ${idxVar} < ${cntVar}; ${idxVar}++) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
+        case 'DeleteStmt': return `delete ${emitExpr(node.target)};`;
         case 'Return':
           return node.value ? `return ${emitExpr(node.value)};` : 'return;';
         case 'Break': return 'break;';
@@ -1434,8 +1563,8 @@ export const RoyLang = (function() {
     }
 
     const assetDeclPrefix = (assetManifest || []).map(a => `const ${a.alias} = __rt._assets[${JSON.stringify(a.alias)}];`).join('\n');
-    const jsBody = (assetDeclPrefix ? assetDeclPrefix + '\n' : '') + ast.body.map(s => emitStmt(s)).join('\n');
-    return { jsCode: jsBody, meta };
+    const jsBody = (assetDeclPrefix ? assetDeclPrefix + '\n' : '') + ast.body.map(s => locTag(s) + emitStmt(s)).join('\n');
+    return { jsCode: jsBody, meta, warnings };
   }
 
   function compile(source, projectFiles = null, entryPath = 'main.roy') {
@@ -1465,7 +1594,7 @@ export const RoyLang = (function() {
       const names = [];
       (body || []).forEach(st => {
         if (!st || !st.exported) return;
-        if (st.type === 'FnDecl' || st.type === 'EntityDecl' || st.type === 'EnumDecl') {
+        if (st.type === 'FnDecl' || st.type === 'EntityDecl' || st.type === 'ClassDecl' || st.type === 'EnumDecl') {
           names.push(st.name);
         } else if (st.type === 'VarDecl') {
           if (st.name) names.push(st.name);
@@ -1511,7 +1640,7 @@ export const RoyLang = (function() {
             const exportsList = collectExportsFromBody(mAst.body);
             const modVar = `__royMod_${++modSeq}`;
             moduleCache[targetFile] = { modVar, exportsList };
-            outStmts.push({ type: 'ModuleScope', modVar, body: resolvedBody, exportsList, line: st.line, col: st.col });
+            outStmts.push({ type: 'ModuleScope', fileName: targetFile, modVar, body: resolvedBody, exportsList, line: st.line, col: st.col });
           }
           const cached = moduleCache[targetFile];
           if (st.mode === 'named') {
@@ -1538,6 +1667,7 @@ export const RoyLang = (function() {
     const entryResolvedStmts = resolveAstImports(entryAst, entryNorm, true);
     const mergedAst = {
       type: 'Program',
+      fileName: entryNorm,
       gameHeader: entryAst.gameHeader,
       body: entryResolvedStmts
     };
@@ -1555,6 +1685,7 @@ export const RoyLang = (function() {
     return {
       jsCode: compiled.jsCode,
       meta: compiled.meta,
+      warnings: compiled.warnings || [],
       assets: uniqueAssets.map(a => ({ alias: a.alias, path: a.path })),
       lineCount: src.split('\n').length
     };
@@ -1570,26 +1701,25 @@ export const RoyLang = (function() {
     const w = Number(m.width) || 800;
     const h = Number(m.height) || 500;
     const pixelated = !!m.pixelated;
+    const scaleMode = String(m.scaleMode || 'fit');
+    const gamepadOpt = m.gamepad;
+    const safeWarningsJson = JSON.stringify(compiled.warnings || []).replace(/<\/script/gi, '<\\/script');
 
     return `<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>${_royEscapeHtml(titleStr)}</title>
   <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; display: flex; align-items: center; justify-content: center; font-family: system-ui, -apple-system, sans-serif; color: #f8fafc; }
+html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; display: flex; align-items: center; justify-content: center; font-family: system-ui, -apple-system, sans-serif; color: #f8fafc; touch-action: none; user-select: none; }
 #royCanvas {
   display: block;
-  max-width: 100vw;
-  max-height: 100vh;
-  width: auto;
-  height: auto;
-  aspect-ratio: ${w} / ${h};
+  ${scaleMode === 'resize'
+    ? 'width: 100vw; height: 100vh;'
+    : `max-width: 100vw; max-height: 100vh; width: auto; height: auto; aspect-ratio: ${w} / ${h}; box-shadow: 0 14px 44px rgba(0,0,0,0.65); border-radius: 6px;`}
   background: ${bgStr};
-  box-shadow: 0 14px 44px rgba(0,0,0,0.65);
-  border-radius: 6px;
   ${pixelated ? 'image-rendering: pixelated;' : ''}
 }
   </style>
@@ -1599,10 +1729,22 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   <script>
 (function() {
   var canvas = document.getElementById('royCanvas');
-  var ctx = canvas.getContext('2d');
+  var rootCtx = canvas.getContext('2d');
+  var ctx = rootCtx;
+  var SCALE_MODE = ${JSON.stringify(scaleMode)};
+  var PIXELATED = ${pixelated ? 'true' : 'false'};
+  var DPR = PIXELATED ? 1 : Math.min(2.5, Math.max(1, window.devicePixelRatio || 1));
   var W = ${w}, H = ${h}, BG = ${JSON.stringify(bgStr)};
+  if (SCALE_MODE === 'resize') {
+    W = Math.max(320, window.innerWidth || ${w});
+    H = Math.max(240, window.innerHeight || ${h});
+  }
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
   var ASSET_MANIFEST = ${safeAssetsJson};
-  var hooks = { start: [], update: [], draw: [], keydown: [], keyup: [], click: [], pointermove: [], wheel: [] };
+  var COMPILE_WARNINGS = ${safeWarningsJson};
+  var hooks = { start: [], update: [], draw: [], drawUi: [], resize: [], keydown: [], keyup: [], click: [], pointermove: [], wheel: [] };
   var sceneHooks = {};
   var timers = [];
   var afterTimers = [];
@@ -1611,9 +1753,16 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var entitiesDrawnThisFrame = false;
   var keysDown = {};
   var keysJustPressed = {};
-  var mouse = { x: W / 2, y: H / 2, rx: W / 2, ry: H / 2, down: false, clicked: false, justReleased: false, wheel: 0 };
+  var touches = [];
+  var toastQueue = [];
+  var scrollStates = {};
+  var uiScrollOffset = { x: 0, y: 0, stack: [] };
+  var activeSliderId = null;
+  var fontFamily = 'system-ui, -apple-system, sans-serif';
+  var mouse = { x: W / 2, y: H / 2, rx: W / 2, ry: H / 2, wx: W / 2, wy: H / 2, down: false, clicked: false, justReleased: false, rightDown: false, rightClicked: false, middleDown: false, overUi: false, wheel: 0 };
   var particlePool = [];
-  var cam = { x: 0, y: 0, zoom: 1, shakePow: 0, shakeDur: 0, shakeTime: 0, followTarget: null, followSmooth: 8 };
+  var cam = { x: 0, y: 0, zoom: 1, shakePow: 0, shakeDur: 0, shakeTime: 0, followTarget: null, followSmooth: 8, bounds: null };
+  var frameCamTransform = { ox: 0, oy: 0, active: false };
   var freezeRem = 0;
   var flashState = { color: '#ffffff', rem: 0, dur: 0 };
   var currentScene = 'main';
@@ -1623,8 +1772,31 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var gameTime = 0;
   var currentFps = 60;
   var audioCtx = null;
+  var audioMuted = false;
+  var tabMuted = false;
+  var bgmState = { timer: null, tracks: [], step: 0, nextTime: 0, stepSec: 0.125, vol: 0.055, key: '' };
+  var runtimeErrorBanner = '';
   var loopCounter = 0;
   var telemetryTimer = 0;
+
+  if (${JSON.stringify(gamepadOpt)} !== null) {
+    try { window.parent.postMessage({ type: 'roy-gamepad-config', visible: !!${JSON.stringify(gamepadOpt)} }, '*'); } catch(e) {}
+  }
+
+  function applyResizeMode() {
+    DPR = PIXELATED ? 1 : Math.min(2.5, Math.max(1, window.devicePixelRatio || 1));
+    if (SCALE_MODE === 'resize') {
+      W = Math.max(320, window.innerWidth || W);
+      H = Math.max(240, window.innerHeight || H);
+    }
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (SCALE_MODE === 'resize') {
+      hooks.resize.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(W, H)).catch(handleHookError); });
+    }
+  }
+  window.addEventListener('resize', applyResizeMode);
 
   function __royLoopTick() {
     if (++loopCounter > 250000) throw new Error('Превышен лимит итераций цикла за кадр');
@@ -1636,8 +1808,29 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     } catch(e) {}
   }
 
+  COMPILE_WARNINGS.forEach(function(w) { emitConsole('warn', w); });
+
+  function formatRoyError(err) {
+    var msg = String(err && err.message ? err.message : err || 'Неизвестная ошибка');
+    var locPrefix = __rt && __rt._loc ? ('[' + __rt._loc + '] ') : '';
+    var mRead = /Cannot read propert(?:y|ies) of (?:undefined|null) \\(reading '([^']+)'\\)/.exec(msg);
+    if (mRead) return locPrefix + 'Попытка прочитать поле "' + mRead[1] + '" у пустого значения (null)';
+    var mSet = /Cannot set propert(?:y|ies) of (?:undefined|null) \\(setting '([^']+)'\\)/.exec(msg);
+    if (mSet) return locPrefix + 'Попытка записать поле "' + mSet[1] + '" в пустое значение (null)';
+    var mUndef = /^([a-zA-Z_$][a-zA-Z0-9_$]*) is not defined$/.exec(msg);
+    if (mUndef) return locPrefix + 'Переменная или функция "' + mUndef[1] + '" не объявлена';
+    var mNotFn = /^([\\s\\S]+) is not a function$/.exec(msg);
+    if (mNotFn) return locPrefix + '"' + mNotFn[1] + '" не является функцией (возможно, опечатка или лишние скобки)';
+    if (msg.indexOf('Assignment to constant variable') >= 0) return locPrefix + 'Нельзя перезаписать константу (const)';
+    return locPrefix + msg;
+  }
+
   function handleHookError(err) {
-    emitConsole('error', err && err.message ? err.message : String(err));
+    var pretty = formatRoyError(err);
+    if (runtimeErrorBanner !== pretty) {
+      runtimeErrorBanner = pretty;
+      emitConsole('error', pretty);
+    }
   }
 
   var NOTE_SEMITONES = { C: 0, 'C#': 1, DB: 1, D: 2, 'D#': 3, EB: 3, E: 4, F: 5, 'F#': 6, GB: 6, G: 7, 'G#': 8, AB: 8, A: 9, 'A#': 10, BB: 10, B: 11 };
@@ -1651,25 +1844,56 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return 440 * Math.pow(2, (midi - 69) / 12);
   }
 
-  function tone(freq, durMsOrSec, wave) {
+  document.addEventListener('visibilitychange', function() {
+    tabMuted = !!document.hidden;
+    if (audioCtx) {
+      if ((audioMuted || tabMuted) && audioCtx.state === 'running') audioCtx.suspend().catch(function(){});
+      else if (!audioMuted && !tabMuted && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
+    }
+  });
+  function unlockAudioCtx() {
+    if (!audioMuted && !tabMuted && audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
+      audioCtx.resume().catch(function(){});
+    }
+  }
+  document.addEventListener('touchend', unlockAudioCtx, { passive: true });
+  document.addEventListener('pointerdown', unlockAudioCtx, { passive: true });
+  document.addEventListener('keydown', unlockAudioCtx, { passive: true });
+
+  function setMuted(flag) {
+    audioMuted = !!flag;
+    if (audioCtx) {
+      if (audioMuted && audioCtx.state === 'running') audioCtx.suspend().catch(function(){});
+      else if (!audioMuted && !tabMuted && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
+    }
+    return audioMuted;
+  }
+
+  function tone(freq, durMsOrSec, wave, vol, slideToFreq) {
+    if (audioMuted || tabMuted) return;
     try {
       var Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) return;
       if (!audioCtx) audioCtx = new Ctx();
-      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') audioCtx.resume().catch(function(){});
       var f = noteToFreq(freq);
       var rawD = Number(durMsOrSec) || 0.12;
-      var dur = rawD > 5 ? rawD / 1000 : rawD;
+      var dur = Math.max(0.02, rawD > 5 ? rawD / 1000 : rawD);
+      var volume = Math.max(0.002, Math.min(0.6, vol === undefined ? 0.08 : Number(vol)));
+      var nowT = audioCtx.currentTime;
       var osc = audioCtx.createOscillator();
       var gain = audioCtx.createGain();
       osc.type = wave || 'square';
-      osc.frequency.setValueAtTime(f, audioCtx.currentTime);
-      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + Math.max(0.02, dur));
+      osc.frequency.setValueAtTime(Math.max(20, f), nowT);
+      if (slideToFreq !== undefined && slideToFreq !== null) {
+        osc.frequency.exponentialRampToValueAtTime(Math.max(20, noteToFreq(slideToFreq)), nowT + dur);
+      }
+      gain.gain.setValueAtTime(volume, nowT);
+      gain.gain.exponentialRampToValueAtTime(0.001, nowT + dur);
       osc.connect(gain);
       gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + Math.max(0.02, dur));
+      osc.start(nowT);
+      osc.stop(nowT + dur);
     } catch(e) {}
   }
 
@@ -1692,6 +1916,76 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     else if (n === 'powerup') { melody(['C5','E5','G5','C6'], 65, 'triangle'); }
     else if (n === 'win') { melody(['C5','E5','G5','C6'], 90, 'sine'); }
     else { tone(620, 0.05, 'sine'); }
+  }
+
+  function parseBgmNotes(seq) {
+    if (Array.isArray(seq)) return seq.slice();
+    return String(seq || '').trim().split(/\\s+/);
+  }
+
+  function scheduleBgmStep(noteStr, atTime, durSec, wave, vol) {
+    if (!noteStr || noteStr === '-' || noteStr === '_' || noteStr === '.') return;
+    if (!audioCtx || audioMuted || tabMuted) return;
+    try {
+      var osc = audioCtx.createOscillator();
+      var gain = audioCtx.createGain();
+      osc.type = wave || 'triangle';
+      osc.frequency.setValueAtTime(Math.max(25, noteToFreq(noteStr)), atTime);
+      gain.gain.setValueAtTime(Math.max(0.002, vol), atTime);
+      gain.gain.exponentialRampToValueAtTime(0.0008, atTime + Math.max(0.04, durSec * 0.92));
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(atTime);
+      osc.stop(atTime + durSec);
+    } catch(e) {}
+  }
+
+  function stopBgm() {
+    if (bgmState.timer) { clearInterval(bgmState.timer); bgmState.timer = null; }
+    bgmState.tracks = [];
+    bgmState.key = '';
+  }
+
+  function bgm(patterns, bpm, wave, vol) {
+    var sig = JSON.stringify([patterns, bpm, wave, vol]);
+    if (bgmState.timer && bgmState.key === sig) return;
+    stopBgm();
+    var trackList = [];
+    var baseVol = vol === undefined ? 0.05 : Math.max(0.005, Math.min(0.4, Number(vol)));
+    if (Array.isArray(patterns) || typeof patterns === 'string') {
+      trackList.push({ notes: parseBgmNotes(patterns), wave: wave || 'triangle', vol: baseVol });
+    } else if (patterns && typeof patterns === 'object') {
+      if (patterns.lead) trackList.push({ notes: parseBgmNotes(patterns.lead), wave: wave || 'square', vol: baseVol });
+      if (patterns.bass) trackList.push({ notes: parseBgmNotes(patterns.bass), wave: 'sawtooth', vol: baseVol * 0.85 });
+      if (patterns.arp) trackList.push({ notes: parseBgmNotes(patterns.arp), wave: 'triangle', vol: baseVol * 0.65 });
+    }
+    if (!trackList.length) return;
+    var tempo = Math.max(40, Math.min(300, Number(bpm) || 120));
+    bgmState.stepSec = 60 / tempo / 2;
+    bgmState.tracks = trackList;
+    bgmState.step = 0;
+    bgmState.key = sig;
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx && !audioCtx) audioCtx = new Ctx();
+    bgmState.nextTime = audioCtx ? audioCtx.currentTime + 0.05 : 0;
+    bgmState.timer = setInterval(function() {
+      if (!audioCtx) return;
+      if (audioMuted || tabMuted || audioCtx.state !== 'running') {
+        bgmState.nextTime = audioCtx.currentTime + 0.05;
+        return;
+      }
+      var lookAhead = audioCtx.currentTime + 0.14;
+      while (bgmState.nextTime < lookAhead) {
+        for (var ti = 0; ti < bgmState.tracks.length; ti++) {
+          var tr = bgmState.tracks[ti];
+          if (tr.notes.length > 0) {
+            scheduleBgmStep(tr.notes[bgmState.step % tr.notes.length], bgmState.nextTime, bgmState.stepSec, tr.wave, tr.vol);
+          }
+        }
+        bgmState.nextTime += bgmState.stepSec;
+        bgmState.step++;
+      }
+    }, 35);
   }
 
   function loadImageAsset(path, onDone) {
@@ -1849,6 +2143,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
     return {
       _isTilemap: true,
+      _rows: grid,
+      _isSolidChar: isSolidChar,
       tileSize: ts,
       rows: grid.length,
       cols: maxCols,
@@ -2024,8 +2320,9 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   function button(label, x, y, w, h, col, hoverCol, textCol, radius) {
     var bw = Number(w) || 160, bh = Number(h) || 44;
-    var mx = mouse.x, my = mouse.y;
+    var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
     var hov = mx >= x && mx <= x + bw && my >= y && my <= y + bh;
+    if (hov) mouse.overUi = true;
     var rad = radius === undefined ? 8 : radius;
     drawRect(x, y, bw, bh, hov ? (hoverCol || '#2563eb') : (col || '#1e293b'), rad);
     ctx.strokeStyle = hov ? '#93c5fd' : 'rgba(148,163,184,0.35)';
@@ -2033,13 +2330,316 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, bw, bh, rad); ctx.stroke(); }
     else { ctx.strokeRect(x, y, bw, bh); }
     ctx.fillStyle = textCol || '#f8fafc';
-    ctx.font = '800 ' + Math.max(12, Math.min(20, Math.floor(bh * 0.42))) + 'px system-ui, sans-serif';
+    ctx.font = '800 ' + Math.max(12, Math.min(20, Math.floor(bh * 0.42))) + 'px ' + fontFamily;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(label || ''), x + bw / 2, y + bh / 2);
     ctx.textBaseline = 'top';
     ctx.textAlign = 'left';
     return hov && mouse.clicked;
+  }
+
+  function panel(x, y, w, h, bgCol, borderCol, radius, lw) {
+    var rad = radius === undefined ? 10 : radius;
+    drawRect(x, y, w, h, bgCol || 'rgba(15,23,42,0.88)', rad);
+    if (borderCol !== null) {
+      ctx.strokeStyle = borderCol || 'rgba(148,163,184,0.35)';
+      ctx.lineWidth = lw || 1.5;
+      if (ctx.roundRect && rad > 0) { ctx.beginPath(); ctx.roundRect(x, y, w, h, rad); ctx.stroke(); }
+      else { ctx.strokeRect(x, y, w, h); }
+    }
+    var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
+    if (mx >= x && mx <= x + w && my >= y && my <= y + h) mouse.overUi = true;
+  }
+
+  function scrollBegin(id, x, y, w, h, contentH) {
+    var key = String(id || 'scroll');
+    if (!scrollStates[key]) scrollStates[key] = { y: 0, dragging: false, lastMy: 0 };
+    var st = scrollStates[key];
+    var maxScroll = Math.max(0, (Number(contentH) || 0) - (Number(h) || 100));
+    var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
+    var inside = mx >= x && mx <= x + w && my >= y && my <= y + h;
+    if (inside) {
+      mouse.overUi = true;
+      if (mouse.wheel !== 0) st.y += mouse.wheel * 0.55;
+      if (mouse.clicked) { st.dragging = true; st.lastMy = mouse.y; }
+    }
+    if (st.dragging) {
+      if (mouse.down) { st.y -= (mouse.y - st.lastMy); st.lastMy = mouse.y; }
+      else st.dragging = false;
+    }
+    st.y = Math.max(0, Math.min(maxScroll, st.y));
+    uiScrollOffset.stack.push({ x: uiScrollOffset.x, y: uiScrollOffset.y, bx: x, by: y, bw: w, bh: h, maxS: maxScroll, curS: st.y });
+    uiScrollOffset.y -= st.y;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.translate(0, -st.y);
+    return st.y;
+  }
+
+  function scrollEnd() {
+    ctx.restore();
+    var info = uiScrollOffset.stack.pop();
+    if (info) {
+      uiScrollOffset.x = info.x;
+      uiScrollOffset.y = info.y;
+      if (info.maxS > 0) {
+        var barH = Math.max(20, (info.bh / (info.bh + info.maxS)) * (info.bh - 8));
+        var barY = info.by + 4 + (info.curS / info.maxS) * (info.bh - 8 - barH);
+        drawRect(info.bx + info.bw - 6, info.by + 4, 4, info.bh - 8, 'rgba(30,41,59,0.55)', 2);
+        drawRect(info.bx + info.bw - 6, barY, 4, barH, '#38bdf8', 2);
+      }
+    }
+  }
+
+  function slider(val, minVal, maxVal, x, y, w, col) {
+    var sw = Number(w) || 180;
+    var mn = Number(minVal) || 0, mxV = maxVal === undefined ? 100 : Number(maxVal);
+    var span = (mxV - mn) || 1;
+    var v = Math.max(mn, Math.min(mxV, Number(val) || 0));
+    var id = 'sl_' + Math.round(x) + '_' + Math.round(y) + '_' + Math.round(sw);
+    var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
+    var hov = mx >= x - 8 && mx <= x + sw + 8 && my >= y - 10 && my <= y + 18;
+    if (hov) mouse.overUi = true;
+    if (hov && mouse.clicked) activeSliderId = id;
+    if (!mouse.down && activeSliderId === id) activeSliderId = null;
+    if (activeSliderId === id) {
+      var ratioNew = Math.max(0, Math.min(1, (mx - x) / sw));
+      v = mn + ratioNew * span;
+    }
+    var ratio = Math.max(0, Math.min(1, (v - mn) / span));
+    var fillC = col || '#38bdf8';
+    drawRect(x, y + 2, sw, 6, '#1e293b', 3);
+    if (ratio > 0) drawRect(x, y + 2, sw * ratio, 6, fillC, 3);
+    drawCircle(x + sw * ratio, y + 5, hov || activeSliderId === id ? 9 : 7, '#ffffff');
+    strokeCircle(x + sw * ratio, y + 5, hov || activeSliderId === id ? 9 : 7, fillC, 2);
+    return v;
+  }
+
+  function toggle(label, val, x, y, col) {
+    var on = !!val;
+    var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
+    var lblW = measureTextBox(label || '', 14).width;
+    var hov = mx >= x && mx <= x + 46 + (label ? lblW + 10 : 0) && my >= y && my <= y + 24;
+    if (hov) mouse.overUi = true;
+    var ac = col || '#10b981';
+    drawRect(x, y, 44, 24, on ? ac : '#334155', 12);
+    drawCircle(on ? x + 32 : x + 12, y + 12, 9, '#ffffff');
+    if (label) text(label, x + 52, y + 4, hov ? '#ffffff' : '#cbd5e1', 14, 'left');
+    if (hov && mouse.clicked) return !on;
+    return on;
+  }
+
+  function drawArc(x, y, r, startAng, endAng, color, lw, fillColor) {
+    var rad = Math.max(0, Number(r) || 16);
+    ctx.beginPath();
+    if (fillColor) ctx.moveTo(x, y);
+    ctx.arc(x, y, rad, Number(startAng) || 0, Number(endAng) || Math.PI * 2);
+    if (fillColor) { ctx.closePath(); ctx.fillStyle = fillColor; ctx.fill(); }
+    if (color !== null) { ctx.strokeStyle = color || '#38bdf8'; ctx.lineWidth = lw || 3; ctx.stroke(); }
+  }
+
+  function drawRing(x, y, innerR, outerR, color) {
+    var rIn = Math.max(0, Number(innerR) || 8), rOut = Math.max(rIn + 1, Number(outerR) || 16);
+    ctx.beginPath();
+    ctx.arc(x, y, rOut, 0, Math.PI * 2, false);
+    ctx.arc(x, y, rIn, 0, Math.PI * 2, true);
+    ctx.fillStyle = color || '#38bdf8';
+    ctx.fill();
+  }
+
+  function drawEllipse(x, y, rx, ry, color, rot, strokeCol, lw) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, Math.max(0, Number(rx) || 16), Math.max(0, Number(ry) || 10), Number(rot) || 0, 0, Math.PI * 2);
+    if (color) { ctx.fillStyle = color; ctx.fill(); }
+    if (strokeCol) { ctx.strokeStyle = strokeCol; ctx.lineWidth = lw || 2; ctx.stroke(); }
+  }
+
+  function drawCurve(x1, y1, cx, cy, x2, y2, color, lw) {
+    ctx.strokeStyle = color || '#38bdf8';
+    ctx.lineWidth = lw || 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(cx, cy, x2, y2);
+    ctx.stroke();
+  }
+
+  function drawBezier(x1, y1, cx1, cy1, cx2, cy2, x2, y2, color, lw) {
+    ctx.strokeStyle = color || '#38bdf8';
+    ctx.lineWidth = lw || 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.bezierCurveTo(cx1, cy1, cx2, cy2, x2, y2);
+    ctx.stroke();
+  }
+
+  function drawPath(pts, color, lw, closed) {
+    if (!Array.isArray(pts) || pts.length < 2) return;
+    ctx.beginPath();
+    for (var i = 0; i < pts.length; i++) {
+      var pt = pts[i];
+      var px = Array.isArray(pt) ? pt[0] : pt.x;
+      var py = Array.isArray(pt) ? pt[1] : pt.y;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    if (closed) ctx.closePath();
+    ctx.strokeStyle = color || '#38bdf8';
+    ctx.lineWidth = lw || 2.5;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+
+  function drawRadialGradient(x, y, r1, r2, c1, c2) {
+    var rad2 = Math.max(1, Number(r2) || 40);
+    var grad = ctx.createRadialGradient(x, y, Math.max(0, Number(r1) || 0), x, y, rad2);
+    grad.addColorStop(0, c1 || '#38bdf8');
+    grad.addColorStop(1, c2 || 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, rad2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function createLayer(lw, lh) {
+    var cw = Math.max(1, Math.floor(Number(lw) || W));
+    var ch = Math.max(1, Math.floor(Number(lh) || H));
+    var lDpr = DPR;
+    var off = document.createElement('canvas');
+    off.width = Math.round(cw * lDpr); off.height = Math.round(ch * lDpr);
+    var octx = off.getContext('2d');
+    octx.setTransform(lDpr, 0, 0, lDpr, 0, 0);
+    return {
+      width: cw, height: ch, canvas: off,
+      begin: function() { ctx = octx; },
+      end: function() { ctx = rootCtx; },
+      clear: function(col) {
+        octx.save();
+        octx.setTransform(lDpr, 0, 0, lDpr, 0, 0);
+        if (col) { octx.fillStyle = col; octx.fillRect(0, 0, cw, ch); }
+        else octx.clearRect(0, 0, cw, ch);
+        octx.restore();
+      },
+      draw: function(px, py, rot, sx, sy) {
+        var x0 = px || 0, y0 = py || 0;
+        var scaleX = sx === undefined ? 1 : Number(sx);
+        var scaleY = sy === undefined ? scaleX : Number(sy);
+        if (!rot && scaleX === 1 && scaleY === 1) {
+          ctx.drawImage(off, 0, 0, off.width, off.height, x0, y0, cw, ch);
+        } else {
+          ctx.save();
+          ctx.translate(x0 + (cw * scaleX) / 2, y0 + (ch * scaleY) / 2);
+          if (rot) ctx.rotate(rot);
+          ctx.scale(scaleX, scaleY);
+          ctx.drawImage(off, 0, 0, off.width, off.height, -cw / 2, -ch / 2, cw, ch);
+          ctx.restore();
+        }
+      }
+    };
+  }
+
+  function beginScreenSpace() {
+    if (ctx === rootCtx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  function beginWorldSpace() {
+    if (ctx !== rootCtx) return;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (frameCamTransform.active) {
+      ctx.translate(W / 2 + frameCamTransform.ox, H / 2 + frameCamTransform.oy);
+      ctx.scale(cam.zoom, cam.zoom);
+      ctx.translate(-W / 2 - cam.x, -H / 2 - cam.y);
+    }
+  }
+
+  function pathfindGrid(gridSrc, sx, sy, tx, ty, wallSpec, allowDiag) {
+    var rows = gridSrc && gridSrc._rows ? gridSrc._rows : gridSrc;
+    if (!Array.isArray(rows) || !rows.length) return [];
+    var gh = rows.length;
+    var gw = Array.isArray(rows[0]) ? rows[0].length : String(rows[0] || '').length;
+    var x0 = Math.floor(sx), y0 = Math.floor(sy), x1 = Math.floor(tx), y1 = Math.floor(ty);
+    if (x0 < 0 || x0 >= gw || y0 < 0 || y0 >= gh || x1 < 0 || x1 >= gw || y1 < 0 || y1 >= gh) return [];
+    function isWall(cx, cy) {
+      var v = Array.isArray(rows[cy]) ? rows[cy][cx] : String(rows[cy])[cx];
+      if (typeof wallSpec === 'function') return !!wallSpec(v, cx, cy);
+      if (wallSpec === undefined) {
+        if (gridSrc && gridSrc._isTilemap && typeof gridSrc._isSolidChar === 'function') return gridSrc._isSolidChar(v);
+        return v === '#' || v === 1 || v === true;
+      }
+      if (typeof wallSpec === 'string') return wallSpec.indexOf(String(v)) >= 0;
+      return v === wallSpec;
+    }
+    if (isWall(x1, y1)) return [];
+    if (x0 === x1 && y0 === y1) return [[x0, y0]];
+    var total = gw * gh;
+    var gScore = new Float64Array(total);
+    var closed = new Uint8Array(total);
+    var parent = new Int32Array(total);
+    for (var i = 0; i < total; i++) { gScore[i] = 1e9; parent[i] = -1; }
+    var startId = y0 * gw + x0, goalId = y1 * gw + x1;
+    gScore[startId] = 0;
+    var open = [{ id: startId, f: Math.abs(x1 - x0) + Math.abs(y1 - y0) }];
+    var dirs = allowDiag
+      ? [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.414],[-1,1,1.414],[1,-1,1.414],[-1,-1,1.414]]
+      : [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1]];
+    var exp = 0;
+    while (open.length > 0 && exp < 4500) {
+      exp++;
+      var bestIdx = 0;
+      for (var oi = 1; oi < open.length; oi++) { if (open[oi].f < open[bestIdx].f) bestIdx = oi; }
+      var cur = open.splice(bestIdx, 1)[0].id;
+      if (cur === goalId) {
+        var out = [];
+        var cId = goalId;
+        while (cId >= 0) {
+          out.push([cId % gw, Math.floor(cId / gw)]);
+          cId = parent[cId];
+        }
+        return out.reverse();
+      }
+      if (closed[cur]) continue;
+      closed[cur] = 1;
+      var cx = cur % gw, cy = Math.floor(cur / gw);
+      for (var d = 0; d < dirs.length; d++) {
+        var nx = cx + dirs[d][0], ny = cy + dirs[d][1];
+        if (nx < 0 || nx >= gw || ny < 0 || ny >= gh) continue;
+        var nid = ny * gw + nx;
+        if (closed[nid] || isWall(nx, ny)) continue;
+        var ng = gScore[cur] + dirs[d][2];
+        if (ng < gScore[nid]) {
+          gScore[nid] = ng;
+          parent[nid] = cur;
+          open.push({ id: nid, f: ng + Math.abs(x1 - nx) + Math.abs(y1 - ny) });
+        }
+      }
+    }
+    return [];
+  }
+
+  function zoomAt(nextZoom, sx, sy) {
+    var prevZ = cam.zoom || 1;
+    var z = Math.max(0.15, Math.min(8, Number(nextZoom) || 1));
+    var px = sx === undefined ? W / 2 : Number(sx);
+    var py = sy === undefined ? H / 2 : Number(sy);
+    var wx = (px - W / 2) / prevZ + W / 2 + cam.x;
+    var wy = (py - H / 2) / prevZ + H / 2 + cam.y;
+    cam.zoom = z;
+    cam.x = wx - W / 2 - (px - W / 2) / z;
+    cam.y = wy - H / 2 - (py - H / 2) / z;
+    return cam.zoom;
+  }
+
+  function showToast(msg, col, durMs) {
+    var d = Math.max(0.4, (Number(durMs) || 2400) / 1000);
+    toastQueue.push({ text: String(msg || ''), color: col || '#38bdf8', rem: d, dur: d });
+    if (toastQueue.length > 5) toastQueue.shift();
+    if (sdk && sdk.ui && typeof sdk.ui.toast === 'function') {
+      try { sdk.ui.toast(msg, col); } catch(e) {}
+    }
   }
 
   function strokeRect(x, y, w, h, color, lw) {
@@ -2121,7 +2721,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   function text(str, x, y, color, size, align) {
     ctx.fillStyle = color || '#f8fafc';
-    ctx.font = '700 ' + (Number(size) || 18) + 'px system-ui, -apple-system, sans-serif';
+    ctx.font = '700 ' + (Number(size) || 18) + 'px ' + fontFamily;
     ctx.textAlign = align || 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(String(str === undefined ? '' : str), x, y);
@@ -2129,7 +2729,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   function textStroke(str, x, y, color, strokeColor, size, align, lw) {
     var s = String(str === undefined ? '' : str);
-    ctx.font = '800 ' + (Number(size) || 20) + 'px system-ui, -apple-system, sans-serif';
+    ctx.font = '800 ' + (Number(size) || 20) + 'px ' + fontFamily;
     ctx.textAlign = align || 'left';
     ctx.textBaseline = 'top';
     ctx.lineJoin = 'round';
@@ -2138,6 +2738,42 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     ctx.strokeText(s, x, y);
     ctx.fillStyle = color || '#f8fafc';
     ctx.fillText(s, x, y);
+  }
+
+  function measureTextBox(str, size) {
+    var sz = Number(size) || 18;
+    ctx.font = '700 ' + sz + 'px ' + fontFamily;
+    var m = ctx.measureText(String(str === undefined ? '' : str));
+    return { width: m.width, height: sz * 1.25 };
+  }
+
+  function textWrap(str, x, y, maxW, color, size, align, lineH) {
+    var sz = Number(size) || 16;
+    var lh = Number(lineH) || Math.round(sz * 1.32);
+    var mw = Math.max(20, Number(maxW) || 240);
+    ctx.fillStyle = color || '#f8fafc';
+    ctx.font = '700 ' + sz + 'px ' + fontFamily;
+    ctx.textAlign = align || 'left';
+    ctx.textBaseline = 'top';
+    var paragraphs = String(str === undefined ? '' : str).split('\\n');
+    var curY = y;
+    for (var p = 0; p < paragraphs.length; p++) {
+      var words = paragraphs[p].split(' ');
+      var line = '';
+      for (var i = 0; i < words.length; i++) {
+        var test = line ? line + ' ' + words[i] : words[i];
+        if (ctx.measureText(test).width > mw && line) {
+          ctx.fillText(line, x, curY);
+          line = words[i];
+          curY += lh;
+        } else {
+          line = test;
+        }
+      }
+      ctx.fillText(line, x, curY);
+      curY += lh;
+    }
+    return curY - y;
   }
 
   function sprite(rows, palette, scale) {
@@ -2332,10 +2968,19 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   };
 
   var gameObj = {
-    width: W, height: H, bg: BG,
+    get width() { return W; },
+    get height() { return H; },
+    get dpr() { return DPR; },
+    bg: BG,
     get time() { return gameTime; },
     get fps() { return currentFps; },
-    clear: function(c) { ctx.fillStyle = c || gameObj.bg; ctx.fillRect(0, 0, W, H); }
+    clear: function(c) {
+      ctx.save();
+      if (ctx === rootCtx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.fillStyle = c || gameObj.bg;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
   };
 
   var sceneObj = {
@@ -2348,6 +2993,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   var __rt = {
     _assets: {},
+    _loc: '',
     BaseEntity: BaseEntity,
     spawn: function(ent) {
       if (ent && typeof ent === 'object') {
@@ -2381,7 +3027,33 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     moveAndCollide: moveAndCollide,
     raycast: raycast,
     button: button,
+    panel: panel,
+    scrollBegin: scrollBegin,
+    scrollEnd: scrollEnd,
+    slider: slider,
+    toggle: toggle,
+    pathfind: pathfindGrid,
     drawGradient: drawGradient,
+    drawRadialGradient: drawRadialGradient,
+    layer: createLayer,
+    beginScreen: beginScreenSpace,
+    beginWorld: beginWorldSpace,
+    zoomAt: zoomAt,
+    pushMatrix: function() { ctx.save(); },
+    popMatrix: function() { ctx.restore(); },
+    translate: function(x, y) { ctx.translate(Number(x) || 0, Number(y) || 0); },
+    rotate: function(rad) { ctx.rotate(Number(rad) || 0); },
+    scale: function(sx, sy) { var x0 = sx === undefined ? 1 : Number(sx); ctx.scale(x0, sy === undefined ? x0 : Number(sy)); },
+    clip: function(x, y, w, h) { ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip(); },
+    unclip: function() { ctx.restore(); },
+    consumeClick: function() { mouse.clicked = false; mouse.rightClicked = false; },
+    setCursor: function(c) { canvas.style.cursor = c || 'default'; },
+    setGamepad: function(opts) {
+      try {
+        var payload = typeof opts === 'boolean' ? { visible: opts } : (opts || {});
+        window.parent.postMessage({ type: 'roy-gamepad-config', visible: payload.visible, wasd: payload.wasd, extras: payload.extras }, '*');
+      } catch(e) {}
+    },
     freezeFrame: function(ms) { var d = Number(ms) || 60; freezeRem = Math.max(freezeRem, d > 10 ? d / 1000 : d); },
     flashScreen: function(col, ms) { var d = Number(ms) || 180; flashState.color = col || '#ffffff'; flashState.dur = d > 10 ? d / 1000 : d; flashState.rem = flashState.dur; },
     scene: sceneObj,
@@ -2391,6 +3063,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     sprite: sprite,
     game: gameObj,
     mouse: mouse,
+    touches: touches,
     player: sdk.player.getSync(),
     RoySDK: sdk,
     world: sdk.world,
@@ -2399,7 +3072,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     load: function(k, d) { return sdk.storage.get(k, d); },
     submitScore: function(sc, opts) { return sdk.leaderboard.submit(sc, opts || { mode: 'best' }); },
     topScores: function(lim) { return sdk.leaderboard.getTop(lim || 15); },
-    toast: function(m, t) { return sdk.ui.toast(m, t); },
+    toast: showToast,
     openDonate: function() { return sdk.ui.openDonate(); },
     setBadge: function(txt) { return sdk.ui.setTitleBadge(txt); },
     cls: function(c) { gameObj.clear(c); },
@@ -2411,14 +3084,23 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     strokeRect: strokeRect,
     drawCircle: drawCircle,
     strokeCircle: strokeCircle,
+    drawArc: drawArc,
+    drawRing: drawRing,
+    drawEllipse: drawEllipse,
     drawLine: drawLine,
     drawPoly: drawPoly,
+    drawPath: drawPath,
+    drawCurve: drawCurve,
+    drawBezier: drawBezier,
     drawStar: drawStar,
     drawBar: drawBar,
     drawGrid: drawGrid,
     pixel: function(x, y, size, color) { drawRect(x, y, size || 10, size || 10, color); },
+    setFont: function(f) { fontFamily = f || 'system-ui, -apple-system, sans-serif'; },
     text: text,
     textStroke: textStroke,
+    textWrap: textWrap,
+    measureText: measureTextBox,
     glow: function(col, blur) { ctx.shadowColor = col || '#38bdf8'; ctx.shadowBlur = Number(blur) || 14; },
     resetGlow: function() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; },
     alpha: function(a) { ctx.globalAlpha = Math.max(0, Math.min(1, Number(a))); },
@@ -2426,6 +3108,10 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     particles: spawnParticles,
     camera: function(x, y, zoom) { cam.x = Number(x) || 0; cam.y = Number(y) || 0; cam.zoom = Number(zoom) || 1; cam.followTarget = null; },
     cameraFollow: function(target, smooth) { cam.followTarget = target || null; if (smooth !== undefined) cam.followSmooth = Number(smooth) || 8; },
+    cameraBounds: function(minX, minY, maxX, maxY) {
+      if (minX === null || minX === undefined) { cam.bounds = null; return; }
+      cam.bounds = { minX: Number(minX) || 0, minY: Number(minY) || 0, maxX: Number(maxX) || W, maxY: Number(maxY) || H };
+    },
     shake: function(power, durMs) { cam.shakePow = Math.max(cam.shakePow, Number(power) || 8); var d = Number(durMs) || 250; cam.shakeDur = d > 10 ? d / 1000 : d; cam.shakeTime = cam.shakeDur; },
     key: function(code) { return !!keysDown[code] || !!keysDown[String(code).toLowerCase()]; },
     keyPressed: function(code) { return !!keysJustPressed[code] || !!keysJustPressed[String(code).toLowerCase()]; },
@@ -2444,6 +3130,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     tone: tone,
     playNote: tone,
     melody: melody,
+    bgm: bgm,
+    stopBgm: stopBgm,
+    setMuted: setMuted,
+    isMuted: function() { return audioMuted || tabMuted; },
+    now: function() { return Date.now(); },
     abs: Math.abs, min: Math.min, max: Math.max,
     clamp: function(v, a, b) { return Math.max(a, Math.min(b, v)); },
     lerp: function(a, b, t) { return a + (b - a) * t; },
@@ -2458,6 +3149,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     },
     sin: Math.sin, cos: Math.cos, atan2: Math.atan2, sqrt: Math.sqrt, pow: Math.pow,
     floor: Math.floor, ceil: Math.ceil, round: Math.round,
+    roundTo: function(v, d) { var f = Math.pow(10, Number(d) || 0); return Math.round((Number(v) || 0) * f) / f; },
+    fmtNum: function(v) { return Math.round(Number(v) || 0).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' '); },
     int: function(v) { return parseInt(v, 10) || 0; },
     float: function(v) { return parseFloat(v) || 0; },
     str: function(v) { return String(v === undefined || v === null ? '' : v); },
@@ -2468,6 +3161,24 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     push: function(arr, v) { if (Array.isArray(arr)) arr.push(v); return arr; },
     pop: function(arr) { return Array.isArray(arr) ? arr.pop() : null; },
     removeAt: function(arr, idx) { if (Array.isArray(arr) && idx >= 0 && idx < arr.length) return arr.splice(idx, 1)[0]; return null; },
+    map: function(arr, fn) { return Array.isArray(arr) && typeof fn === 'function' ? arr.map(fn) : []; },
+    filter: function(arr, fn) { return Array.isArray(arr) && typeof fn === 'function' ? arr.filter(fn) : []; },
+    find: function(arr, fn) { return Array.isArray(arr) && typeof fn === 'function' ? (arr.find(fn) ?? null) : null; },
+    some: function(arr, fn) { return Array.isArray(arr) && typeof fn === 'function' ? arr.some(fn) : false; },
+    everyItem: function(arr, fn) { return Array.isArray(arr) && typeof fn === 'function' ? arr.every(fn) : false; },
+    reduce: function(arr, fn, init) { return Array.isArray(arr) && typeof fn === 'function' ? (init !== undefined ? arr.reduce(fn, init) : arr.reduce(fn)) : init; },
+    sort: function(arr, fn) { if (!Array.isArray(arr)) return []; var cp = arr.slice(); return typeof fn === 'function' ? cp.sort(fn) : cp.sort(function(a, b){ return a > b ? 1 : (a < b ? -1 : 0); }); },
+    slice: function(v, a, b) { return (Array.isArray(v) || typeof v === 'string') ? v.slice(a, b) : []; },
+    reverse: function(arr) { return Array.isArray(arr) ? arr.slice().reverse() : []; },
+    contains: function(col, val) { return Array.isArray(col) || typeof col === 'string' ? col.indexOf(val) >= 0 : false; },
+    indexOf: function(col, val) { return Array.isArray(col) || typeof col === 'string' ? col.indexOf(val) : -1; },
+    flat: function(arr, d) { return Array.isArray(arr) ? arr.flat(d === undefined ? 1 : d) : []; },
+    split: function(s, sep) { return String(s === undefined || s === null ? '' : s).split(sep === undefined ? '' : sep); },
+    join: function(arr, sep) { return Array.isArray(arr) ? arr.join(sep === undefined ? ',' : sep) : ''; },
+    trim: function(s) { return String(s === undefined || s === null ? '' : s).trim(); },
+    upper: function(s) { return String(s === undefined || s === null ? '' : s).toUpperCase(); },
+    lower: function(s) { return String(s === undefined || s === null ? '' : s).toLowerCase(); },
+    replace: function(s, a, b) { return String(s === undefined || s === null ? '' : s).split(String(a)).join(String(b === undefined ? '' : b)); },
     keys: function(o) { return o && typeof o === 'object' ? Object.keys(o) : []; },
     values: function(o) { return o && typeof o === 'object' ? Object.values(o) : []; },
     dist: function(x1, y1, x2, y2) { return Math.hypot((x2 || 0) - (x1 || 0), (y2 || 0) - (y1 || 0)); },
@@ -2480,12 +3191,33 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     var r = canvas.getBoundingClientRect();
     var sx = ((e.clientX - r.left) / (r.width || 1)) * W;
     var sy = ((e.clientY - r.top) / (r.height || 1)) * H;
-    return {
-      x: sx, y: sy,
-      rx: (sx - W / 2) / (cam.zoom || 1) + W / 2 + cam.x,
-      ry: (sy - H / 2) / (cam.zoom || 1) + H / 2 + cam.y
-    };
+    var wx = (sx - W / 2) / (cam.zoom || 1) + W / 2 + cam.x;
+    var wy = (sy - H / 2) / (cam.zoom || 1) + H / 2 + cam.y;
+    return { x: sx, y: sy, rx: wx, ry: wy, wx: wx, wy: wy };
   }
+
+  function updateTouchesList(touchList) {
+    touches.length = 0;
+    for (var i = 0; i < touchList.length; i++) {
+      var p = canvasCoords(touchList[i]);
+      touches.push({ id: touchList[i].identifier, x: p.x, y: p.y, wx: p.wx, wy: p.wy });
+    }
+  }
+
+  window.addEventListener('message', function(e) {
+    var d = e && e.data;
+    if (!d || d.type !== 'roy-virtual-key') return;
+    var code = String(d.code || '');
+    var k = String(d.key || code);
+    if (d.pressed) {
+      if (!keysDown[code]) { keysJustPressed[code] = true; keysJustPressed[k.toLowerCase()] = true; }
+      keysDown[code] = true; keysDown[k] = true; keysDown[k.toLowerCase()] = true;
+      hooks.keydown.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(k)).catch(handleHookError); });
+    } else {
+      delete keysDown[code]; delete keysDown[k]; delete keysDown[k.toLowerCase()];
+      hooks.keyup.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(k)).catch(handleHookError); });
+    }
+  });
 
   window.addEventListener('keydown', function(e) {
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space',' '].indexOf(e.key) >= 0) e.preventDefault();
@@ -2499,20 +3231,63 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     hooks.keyup.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(e.key)).catch(handleHookError); });
   });
 
+  canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
   canvas.addEventListener('mousemove', function(e) {
     var p = canvasCoords(e);
-    mouse.x = p.x; mouse.y = p.y; mouse.rx = p.rx; mouse.ry = p.ry;
+    mouse.x = p.x; mouse.y = p.y; mouse.rx = p.rx; mouse.ry = p.ry; mouse.wx = p.wx; mouse.wy = p.wy;
     hooks.pointermove.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(p.x, p.y)).catch(handleHookError); });
   });
 
   canvas.addEventListener('mousedown', function(e) {
     var p = canvasCoords(e);
-    mouse.x = p.x; mouse.y = p.y; mouse.rx = p.rx; mouse.ry = p.ry;
-    mouse.down = true; mouse.clicked = true;
+    mouse.x = p.x; mouse.y = p.y; mouse.rx = p.rx; mouse.ry = p.ry; mouse.wx = p.wx; mouse.wy = p.wy;
+    if (e.button === 2) { mouse.rightDown = true; mouse.rightClicked = true; }
+    else if (e.button === 1) { mouse.middleDown = true; }
+    else { mouse.down = true; mouse.clicked = true; }
     hooks.click.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(p.x, p.y, e.button)).catch(handleHookError); });
   });
 
-  window.addEventListener('mouseup', function() { if (mouse.down) mouse.justReleased = true; mouse.down = false; });
+  window.addEventListener('mouseup', function(e) {
+    if (e.button === 2) mouse.rightDown = false;
+    else if (e.button === 1) mouse.middleDown = false;
+    else { if (mouse.down) mouse.justReleased = true; mouse.down = false; }
+  });
+
+  canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    updateTouchesList(e.touches);
+    if (touches.length > 0) {
+      var t0 = touches[0];
+      mouse.x = t0.x; mouse.y = t0.y; mouse.rx = t0.wx; mouse.ry = t0.wy; mouse.wx = t0.wx; mouse.wy = t0.wy;
+      if (e.touches.length === 1) {
+        mouse.down = true; mouse.clicked = true;
+        hooks.click.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(t0.x, t0.y, 0)).catch(handleHookError); });
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    updateTouchesList(e.touches);
+    if (touches.length > 0) {
+      var t0 = touches[0];
+      mouse.x = t0.x; mouse.y = t0.y; mouse.rx = t0.wx; mouse.ry = t0.wy; mouse.wx = t0.wx; mouse.wy = t0.wy;
+      hooks.pointermove.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(t0.x, t0.y)).catch(handleHookError); });
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', function(e) {
+    updateTouchesList(e.touches);
+    if (touches.length === 0) {
+      if (mouse.down) mouse.justReleased = true;
+      mouse.down = false;
+    }
+  });
+  canvas.addEventListener('touchcancel', function(e) {
+    updateTouchesList(e.touches);
+    if (touches.length === 0) mouse.down = false;
+  });
 
   canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
@@ -2600,6 +3375,16 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       cam.x += (tx - cam.x) * alphaCam;
       cam.y += (ty - cam.y) * alphaCam;
     }
+    if (cam.bounds) {
+      var halfViewW = (W / 2) / (cam.zoom || 1);
+      var halfViewH = (H / 2) / (cam.zoom || 1);
+      var bMinX = cam.bounds.minX + halfViewW - W / 2;
+      var bMaxX = cam.bounds.maxX - halfViewW - W / 2;
+      var bMinY = cam.bounds.minY + halfViewH - H / 2;
+      var bMaxY = cam.bounds.maxY - halfViewH - H / 2;
+      if (bMinX <= bMaxX) cam.x = Math.max(bMinX, Math.min(bMaxX, cam.x));
+      if (bMinY <= bMaxY) cam.y = Math.max(bMinY, Math.min(bMaxY, cam.y));
+    }
     var shakeOx = 0, shakeOy = 0;
     if (cam.shakeTime > 0) {
       cam.shakeTime = Math.max(0, cam.shakeTime - dt);
@@ -2609,10 +3394,19 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       shakeOy = (Math.random() * 2 - 1) * mag;
     } else { cam.shakePow = 0; }
 
+    mouse.overUi = false;
+    mouse.wx = (mouse.x - W / 2) / (cam.zoom || 1) + W / 2 + cam.x;
+    mouse.wy = (mouse.y - H / 2) / (cam.zoom || 1) + H / 2 + cam.y;
+    mouse.rx = mouse.wx; mouse.ry = mouse.wy;
+
+    ctx = rootCtx;
     ctx.save();
     ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     gameObj.clear();
-    if (cam.zoom !== 1 || cam.x !== 0 || cam.y !== 0 || shakeOx !== 0 || shakeOy !== 0) {
+    frameCamTransform.ox = shakeOx;
+    frameCamTransform.oy = shakeOy;
+    frameCamTransform.active = (cam.zoom !== 1 || cam.x !== 0 || cam.y !== 0 || shakeOx !== 0 || shakeOy !== 0);
+    if (frameCamTransform.active) {
       ctx.translate(W / 2 + shakeOx, H / 2 + shakeOy);
       ctx.scale(cam.zoom, cam.zoom);
       ctx.translate(-W / 2 - cam.x, -H / 2 - cam.y);
@@ -2627,6 +3421,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       drawEntitiesNow();
     }
     inDraw = false;
+    ctx = rootCtx;
     ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.globalCompositeOperation = 'source-over';
     for (var pj = 0; pj < particlePool.length; pj++) {
       var q = particlePool[pj];
@@ -2636,6 +3431,48 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
     ctx.globalAlpha = 1;
     ctx.restore();
+
+    // Экранный слой HUD поверх мира (без зума и смещения камеры)
+    if (hooks.drawUi.length > 0) {
+      ctx.save();
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      for (var uiIdx = 0; uiIdx < hooks.drawUi.length; uiIdx++) {
+        loopCounter = 0;
+        Promise.resolve(hooks.drawUi[uiIdx]()).catch(handleHookError);
+      }
+      ctx = rootCtx;
+      ctx.restore();
+    }
+
+    // Очередь встроенных тост-уведомлений
+    if (toastQueue.length > 0) {
+      ctx.save();
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      for (var ti2 = toastQueue.length - 1; ti2 >= 0; ti2--) {
+        var tst = toastQueue[ti2];
+        tst.rem -= dt;
+        if (tst.rem <= 0) { toastQueue.splice(ti2, 1); continue; }
+        var tAlpha = Math.min(1, tst.rem * 2.5, (tst.dur - tst.rem) * 6 + 0.2);
+        var ty = 14 + ti2 * 38;
+        ctx.globalAlpha = tAlpha;
+        var twBox = Math.min(W - 40, Math.max(180, measureTextBox(tst.text, 13).width + 36));
+        drawRect(W / 2 - twBox / 2, ty, twBox, 30, 'rgba(9,13,26,0.92)', 8);
+        ctx.strokeStyle = tst.color || '#38bdf8';
+        ctx.lineWidth = 1.5;
+        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(W / 2 - twBox / 2, ty, twBox, 30, 8); ctx.stroke(); }
+        else ctx.strokeRect(W / 2 - twBox / 2, ty, twBox, 30);
+        text(tst.text, W / 2, ty + 8, tst.color || '#f8fafc', 13, 'center');
+      }
+      ctx.restore();
+    }
+
+    if (runtimeErrorBanner) {
+      ctx.save();
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      drawRect(12, H - 40, W - 24, 28, 'rgba(127,29,29,0.92)', 6);
+      text('RoyLang: ' + runtimeErrorBanner, 22, H - 33, '#fecaca', 12, 'left');
+      ctx.restore();
+    }
 
     if (flashState.rem > 0) {
       flashState.rem = Math.max(0, flashState.rem - dt);
@@ -2648,6 +3485,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
     keysJustPressed = {};
     mouse.clicked = false;
+    mouse.rightClicked = false;
     mouse.justReleased = false;
     mouse.wheel = 0;
     requestAnimationFrame(frameLoop);
@@ -2667,12 +3505,14 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     lastTs = performance.now();
     requestAnimationFrame(frameLoop);
   }).catch(function(err) {
-    emitConsole('error', err && err.message ? err.message : String(err));
-    ctx.fillStyle = '#090d16';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#f87171';
-    ctx.font = '700 18px system-ui, sans-serif';
-    ctx.fillText('Ошибка RoyLang: ' + (err && err.message ? err.message : err), 20, 32);
+    var pretty = formatRoyError(err);
+    emitConsole('error', pretty);
+    rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    rootCtx.fillStyle = '#090d16';
+    rootCtx.fillRect(0, 0, W, H);
+    rootCtx.fillStyle = '#f87171';
+    rootCtx.font = '700 17px system-ui, sans-serif';
+    rootCtx.fillText('Ошибка RoyLang: ' + pretty, 20, 32);
   });
 })();
   <\/script>

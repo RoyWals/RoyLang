@@ -10,15 +10,20 @@ const KEY_DEFS = {
   KeyD: { code: 'KeyD', key: 'd', keyCode: 68 },
   KeyW: { code: 'KeyW', key: 'w', keyCode: 87 },
   KeyS: { code: 'KeyS', key: 's', keyCode: 83 },
+  KeyE: { code: 'KeyE', key: 'e', keyCode: 69 },
+  KeyQ: { code: 'KeyQ', key: 'q', keyCode: 81 },
+  ShiftLeft: { code: 'ShiftLeft', key: 'Shift', keyCode: 16 },
   Space: { code: 'Space', key: ' ', keyCode: 32 },
   Enter: { code: 'Enter', key: 'Enter', keyCode: 13 }
 };
 
-export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl }) {
+export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onVisibilityChange }) {
   let active = false;
   let useWasd = false;
+  let extraButtons = []; // [{ label, code }]
   const activePointers = new Map(); // pointerId -> mappedKeyCode
   const keyHoldCounts = new Map(); // mappedKeyCode -> count
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   function dispatchVirtualKey(codeName, pressed) {
     const def = KEY_DEFS[codeName];
@@ -71,6 +76,7 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl }) {
     if (dir === 'right') return useWasd ? 'KeyD' : 'ArrowRight';
     if (dir === 'a') return 'Space';
     if (dir === 'b') return 'Enter';
+    if (String(dir || '').indexOf('extra:') === 0) return String(dir).slice(6);
     return null;
   }
 
@@ -158,6 +164,7 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl }) {
       </div>
       <div class="roy-gamepad-cluster roy-gamepad-actions">
         <button type="button" class="roy-pad-mode-pill" data-pad-mode-toggle title="Переключить Стрелки / WASD">${useWasd ? 'WASD' : 'Стрелки'}</button>
+        ${extraButtons.length > 0 ? `<div style="display:flex; gap:8px; justify-content:flex-end;">${extraButtons.map(b => `<button type="button" class="roy-pad-btn roy-pad-action" style="width:42px;height:42px;font-size:12px;" data-pad-dir="extra:${esc(b.code)}" aria-label="${esc(b.code)}">${esc(b.label)}</button>`).join('')}</div>` : ''}
         <div style="display:flex; gap:12px; align-items:flex-end;">
           <button type="button" class="roy-pad-btn roy-pad-action roy-pad-b" data-pad-dir="b" aria-label="Enter">B</button>
           <button type="button" class="roy-pad-btn roy-pad-action roy-pad-a" data-pad-dir="a" aria-label="Space">A</button>
@@ -167,16 +174,65 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl }) {
     bindOverlayEvents(overlay);
   }
 
+  function setConfig(cfg) {
+    if (!cfg || typeof cfg !== 'object') return;
+    if (typeof cfg.wasd === 'boolean') useWasd = cfg.wasd;
+    if (Array.isArray(cfg.extras)) {
+      extraButtons = cfg.extras.slice(0, 3).map(item => {
+        if (typeof item === 'string') {
+          if (!KEY_DEFS[item]) KEY_DEFS[item] = { code: item, key: item.replace(/^Key/, '').toLowerCase(), keyCode: 0 };
+          return { code: item, label: item.replace(/^Key|^Shift/, '').slice(0, 3).toUpperCase() };
+        }
+        const code = String(item.code || 'KeyE');
+        if (!KEY_DEFS[code]) KEY_DEFS[code] = { code, key: item.key || code.replace(/^Key/, '').toLowerCase(), keyCode: 0 };
+        return { code, label: String(item.label || code).slice(0, 4) };
+      });
+    }
+    const overlay = typeof getOverlayEl === 'function' ? getOverlayEl() : null;
+    if (overlay) {
+      if (active) renderMarkup(overlay);
+      else overlay.innerHTML = '';
+    }
+    if (typeof cfg.visible === 'boolean') setVisible(cfg.visible);
+  }
+
+  function resetConfig() {
+    releaseAll();
+    useWasd = false;
+    extraButtons = [];
+    const overlay = typeof getOverlayEl === 'function' ? getOverlayEl() : null;
+    if (overlay) {
+      overlay.innerHTML = '';
+    }
+    setVisible(false);
+  }
+
+  if (typeof window !== 'undefined' && !window._royGamepadMsgBound) {
+    window._royGamepadMsgBound = true;
+    window.addEventListener('message', (e) => {
+      const d = e && e.data;
+      if (!d || d.type !== 'roy-gamepad-config') return;
+      const iframe = typeof getIframeEl === 'function' ? getIframeEl() : null;
+      if (iframe && iframe.contentWindow && e.source === iframe.contentWindow) {
+        setConfig(d);
+      }
+    });
+  }
+
   function setVisible(show) {
     active = !!show;
     const overlay = typeof getOverlayEl === 'function' ? getOverlayEl() : null;
-    if (!overlay) return active;
-    if (!active) {
-      releaseAll();
-      overlay.style.display = 'none';
-    } else {
-      if (!overlay.innerHTML.trim()) renderMarkup(overlay);
-      overlay.style.display = 'flex';
+    if (overlay) {
+      if (!active) {
+        releaseAll();
+        overlay.style.display = 'none';
+      } else {
+        if (!overlay.innerHTML.trim()) renderMarkup(overlay);
+        overlay.style.display = 'flex';
+      }
+    }
+    if (typeof onVisibilityChange === 'function') {
+      try { onVisibilityChange(active); } catch (_) {}
     }
     return active;
   }
@@ -189,5 +245,5 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl }) {
     return active;
   }
 
-  return { setVisible, toggle, isVisible, releaseAll };
+  return { setVisible, toggle, isVisible, releaseAll, setConfig, resetConfig };
 }
