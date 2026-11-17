@@ -398,12 +398,47 @@ export const RoyLang = (function() {
       function parseExportStmt() {
         const kw = expect('KW', 'export');
         const nt = peek();
+        if (nt.type === 'OP' && nt.value === '*') {
+          pos++;
+          const fromTok = peek();
+          if (fromTok.type !== 'IDENT' || fromTok.value !== 'from') {
+            throw compileError('Ожидалось "from" после export *', fromTok.line, fromTok.col, fileName);
+          }
+          pos++;
+          const pTok = expect('STRING', undefined, 'Ожидался путь к модулю в кавычках после from');
+          match('PUNC', ';');
+          return { type: 'ReExportDecl', mode: 'all', path: pTok.value, specifiers: [], line: kw.line, col: kw.col };
+        }
+        if (nt.type === 'PUNC' && nt.value === '{') {
+          pos++;
+          const specifiers = [];
+          while (!isVal('PUNC', '}') && !atEnd()) {
+            const expName = expect('IDENT', undefined, 'Ожидалось имя экспорта');
+            let alias = expName.value;
+            if (peek().type === 'IDENT' && peek().value === 'as') {
+              pos++;
+              alias = expect('IDENT', undefined, 'Ожидался псевдоним после as').value;
+            }
+            specifiers.push({ name: expName.value, alias });
+            if (!match('PUNC', ',')) break;
+          }
+          expect('PUNC', '}', 'Ожидалась "}" в списке экспорта');
+          if (peek().type === 'IDENT' && peek().value === 'from') {
+            pos++;
+            const pTok = expect('STRING', undefined, 'Ожидался путь к модулю в кавычках');
+            match('PUNC', ';');
+            return { type: 'ReExportDecl', mode: 'named', path: pTok.value, specifiers, line: kw.line, col: kw.col };
+          }
+          match('PUNC', ';');
+          return { type: 'LocalExportList', specifiers, line: kw.line, col: kw.col };
+        }
         let inner = null;
         if ((nt.type === 'KW' && nt.value === 'fn') || (nt.type === 'IDENT' && nt.value === 'function')) inner = parseFnDecl();
+        else if (nt.type === 'IDENT' && nt.value === 'task' && peek(1).type === 'IDENT' && peek(2).type === 'PUNC' && peek(2).value === '(') inner = parseTaskDecl();
         else if (nt.type === 'KW' && (nt.value === 'entity' || nt.value === 'class')) inner = parseEntityDecl();
         else if (nt.type === 'KW' && nt.value === 'enum') inner = parseEnumDecl();
         else if (nt.type === 'KW' && (nt.value === 'var' || nt.value === 'let' || nt.value === 'const')) inner = parseVarDecl();
-        else throw compileError('После export поддерживаются fn, entity, class, enum, let/var/const', nt.line, nt.col, fileName);
+        else throw compileError('После export поддерживаются fn, task, entity, class, enum, let/var/const или { ... } from', nt.line, nt.col, fileName);
         inner.exported = true;
         return inner;
       }
@@ -510,6 +545,9 @@ export const RoyLang = (function() {
         if (t.type === 'IDENT' && t.value === 'function' && peek(1).type === 'IDENT') {
           return parseFnDecl();
         }
+        if (t.type === 'IDENT' && t.value === 'task' && peek(1).type === 'IDENT' && peek(2).type === 'PUNC' && peek(2).value === '(') {
+          return parseTaskDecl();
+        }
         if (isVal('PUNC', '{')) return parseBlock();
 
         const expr = parseExpression();
@@ -581,6 +619,14 @@ export const RoyLang = (function() {
         return { type: 'FnDecl', name: nameTok.value, params, body, usedJsFunction: kw.value === 'function', line: kw.line, col: kw.col };
       }
 
+      function parseTaskDecl() {
+        const kw = expect('IDENT', 'task');
+        const nameTok = expect('IDENT', undefined, 'Ожидалось имя корутины task');
+        const params = parseParamDefs(true);
+        const body = parseBlock();
+        return { type: 'TaskDecl', name: nameTok.value, params, body, line: kw.line, col: kw.col };
+      }
+
       function parseEntityDecl() {
         const kw = expect('KW');
         const isClass = kw.value === 'class';
@@ -593,6 +639,8 @@ export const RoyLang = (function() {
         expect('PUNC', '{', `Ожидалась "{" после объявления ${isClass ? 'class' : 'entity'}`);
         const fields = [];
         const methods = [];
+        const states = [];
+        const entityTimers = [];
         let initMethod = null;
         while (!isVal('PUNC', '}') && !atEnd()) {
           while (match('PUNC', ';') || match('PUNC', ',')) {}
@@ -602,6 +650,37 @@ export const RoyLang = (function() {
             const m = parseFnDecl();
             if (m.name === 'init') initMethod = m;
             else methods.push(m);
+          } else if (nt.type === 'IDENT' && nt.value === 'task' && peek(1).type === 'IDENT' && peek(2).type === 'PUNC' && peek(2).value === '(') {
+            const tDecl = parseTaskDecl();
+            tDecl.isTask = true;
+            methods.push(tDecl);
+          } else if (nt.type === 'IDENT' && nt.value === 'state' && peek(1).type === 'STRING') {
+            pos++;
+            const stName = expect('STRING').value;
+            expect('PUNC', '{', `Ожидалась "{" после state "${stName}"`);
+            const handlers = {};
+            while (!isVal('PUNC', '}') && !atEnd()) {
+              while (match('PUNC', ';') || match('PUNC', ',')) {}
+              if (isVal('PUNC', '}')) break;
+              if (match('KW', 'on')) {
+                const hTok = expect('IDENT', undefined, 'Ожидалось enter, update, draw или exit в state');
+                const hParams = parseParamDefs(false);
+                const hBody = parseBlock();
+                handlers[hTok.value] = { params: hParams, body: hBody, line: hTok.line };
+              } else if (isVal('KW', 'fn') || (isVal('IDENT', 'function') && peek(1).type === 'IDENT')) {
+                const hm = parseFnDecl();
+                handlers[hm.name] = { params: hm.params, body: hm.body, line: hm.line };
+              } else {
+                const ut = peek();
+                throw compileError(`Внутри state "${stName}" ожидались "on enter/update/draw/exit" или "fn ...", встречено "${ut.value || ut.type}"`, ut.line, ut.col, fileName);
+              }
+            }
+            expect('PUNC', '}', `Ожидалась "}" в конце state "${stName}"`);
+            states.push({ name: stName, handlers, line: nt.line, col: nt.col });
+          } else if (isVal('KW', 'after')) {
+            entityTimers.push(parseAfterHook());
+          } else if (isVal('KW', 'every')) {
+            entityTimers.push(parseEveryHook());
           } else if (isVal('KW', 'let') || isVal('KW', 'var') || isVal('KW', 'const')) {
             const vd = parseVarDecl();
             if (!vd.name) throw compileError(`Внутри ${isClass ? 'class' : 'entity'} поля должны иметь простые имена`, vd.line, vd.col, fileName);
@@ -613,11 +692,11 @@ export const RoyLang = (function() {
             match('PUNC', ';'); match('PUNC', ',');
             fields.push({ name: fTok.value, init: fVal, line: fTok.line, col: fTok.col });
           } else {
-            throw compileError(`Внутри ${isClass ? 'class' : 'entity'} ожидались поля или методы fn (...), встречено "${nt.value || nt.type}"`, nt.line, nt.col, fileName);
+            throw compileError(`Внутри ${isClass ? 'class' : 'entity'} ожидались поля, методы fn/task, state "..." или after/every, встречено "${nt.value || nt.type}"`, nt.line, nt.col, fileName);
           }
         }
         expect('PUNC', '}', `Ожидалась "}" в конце ${isClass ? 'class' : 'entity'}`);
-        return { type: isClass ? 'ClassDecl' : 'EntityDecl', name: nameTok.value, ctorParams, superName, fields, methods, initMethod, line: kw.line, col: kw.col };
+        return { type: isClass ? 'ClassDecl' : 'EntityDecl', name: nameTok.value, ctorParams, superName, fields, methods, states, entityTimers, initMethod, line: kw.line, col: kw.col };
       }
 
       function parseEnumDecl() {
@@ -1249,7 +1328,7 @@ export const RoyLang = (function() {
         const name = calleeChainName(node.callee);
         if (ASYNC_ROOTS.has(name) || ASYNC_MEMBERS.has(name) || asyncFnNames.has(name)) return true;
       }
-      if (node.type === 'FnExpr' || node.type === 'FnDecl') return false;
+      if (node.type === 'FnExpr' || node.type === 'FnDecl' || node.type === 'TaskDecl') return false;
       for (const k of Object.keys(node)) {
         const v = node[k];
         if (Array.isArray(v)) {
@@ -1292,21 +1371,23 @@ export const RoyLang = (function() {
 
     const KNOWN_RUNTIME_GLOBALS = new Set([
       'BaseEntity', 'spawn', 'entities', 'destroyAll', 'drawEntities', 'on', 'every', 'after', 'wait',
-      'loadImage', 'loadSound', 'loadJson', 'tilemap', 'moveAndCollide', 'raycast', 'bounceCircle', 'spatialQuery',
+      'spawnTask', 'cancelTasks', 'setState',
+      'loadImage', 'loadSound', 'loadJson', 'tilemap', 'tileMask', 'panel9', 'moveAndCollide', 'moveCircle', 'raycast', 'lineOfSight', 'bounceCircle', 'spatialQuery',
+      'steerSeek', 'steerArrive', 'steerSeparate',
       'button', 'panel', 'scrollBegin', 'scrollEnd', 'slider', 'toggle', 'pathfind',
       'drawGradient', 'drawRadialGradient', 'layer', 'beginScreen', 'beginWorld', 'zoomAt',
       'pushMatrix', 'popMatrix', 'translate', 'rotate', 'scale', 'clip', 'unclip', 'consumeClick', 'setCursor',
       'setGamepad', 'vibrate', 'freezeFrame', 'hitStop', 'flashScreen', 'timeScale',
-      'fx', 'setShader', 'ambientLight', 'light', 'shadowLight', 'shadowCasters',
+      'fx', 'setShader', 'shockwave', 'weather', 'ambientLight', 'light', 'shadowLight', 'coneLight', 'shadowCasters',
       'setBlend', 'setShadow', 'resetShadow', 'drawTrail', 'debug',
-      'scene', 'goto', 'tween', 'vec', 'sprite', 'game', 'mouse', 'touches', 'player', 'RoySDK', 'world', 'rooms',
+      'scene', 'goto', 'pushScene', 'popScene', 'tween', 'vec', 'sprite', 'game', 'mouse', 'touches', 'player', 'RoySDK', 'world', 'rooms',
       'save', 'load', 'submitScore', 'topScores', 'toast', 'openDonate', 'setBadge', 'cls', 'clear',
       'rect', 'circle', 'drawObj', 'drawRect', 'strokeRect', 'drawCircle', 'strokeCircle',
       'drawArc', 'drawRing', 'drawEllipse', 'drawLine', 'drawPoly', 'drawPath', 'drawCurve', 'drawBezier',
       'drawStar', 'drawBar', 'drawGrid', 'pixel', 'setFont', 'text', 'textStroke', 'textWrap', 'measureText',
       'glow', 'resetGlow', 'alpha', 'blend', 'particles', 'emitParticles',
-      'camera', 'cameraFollow', 'cameraBounds', 'shake', 'key', 'keyPressed', 'axis',
-      'sfx', 'tone', 'playNote', 'melody', 'bgm', 'stopBgm', 'setMuted', 'isMuted', 'now',
+      'camera', 'getCamera', 'camX', 'camY', 'camZoom', 'inView', 'cameraFollow', 'cameraBounds', 'shake', 'key', 'keyPressed', 'axis',
+      'sfx', 'synth', 'tone', 'playNote', 'melody', 'bgm', 'syncBgm', 'stopBgm', 'setMuted', 'isMuted', 'now',
       'abs', 'min', 'max', 'clamp', 'lerp', 'wrap', 'sign', 'approach', 'range',
       'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sqrt', 'pow', 'floor', 'ceil', 'round', 'roundTo',
       'log10', 'exp', 'PI', 'TAU', 'noise2d', 'fbm', 'hsl', 'lerpColor',
@@ -1377,7 +1458,7 @@ export const RoyLang = (function() {
         if (s.type === 'VarDecl') {
           if (s.name) set.add(s.name);
           if (s.pattern) addPatternNames(s.pattern, set);
-        } else if (s.type === 'FnDecl' || s.type === 'ClassDecl' || s.type === 'EntityDecl' || s.type === 'EnumDecl') {
+        } else if (s.type === 'FnDecl' || s.type === 'TaskDecl' || s.type === 'ClassDecl' || s.type === 'EntityDecl' || s.type === 'EnumDecl') {
           if (s.name) set.add(s.name);
         } else if (s.type === 'ImportBinding') {
           if (s.mode === 'namespace' && s.nsAlias) set.add(s.nsAlias);
@@ -1386,11 +1467,71 @@ export const RoyLang = (function() {
       });
     }
 
+    const declaredScenes = new Set(['main']);
+    const declaredLocalEntities = [];
+    const referencedIdents = new Set();
+
+    function collectPreFlightMeta(node, fName, inOwnEntityDeclName) {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'ModuleScope') {
+        const mf = node.fileName || fName;
+        (node.body || []).forEach(s => collectPreFlightMeta(s, mf, null));
+        return;
+      }
+      if (node.type === 'OnHook' && node.sceneFilter) {
+        declaredScenes.add(node.sceneFilter);
+      }
+      if (node.type === 'EntityDecl') {
+        if (!node.exported && node.name) {
+          declaredLocalEntities.push({ name: node.name, file: fName, line: node.line });
+        }
+        if (node.superName) referencedIdents.add(node.superName);
+        if (node.initMethod) collectPreFlightMeta(node.initMethod, fName, node.name);
+        (node.methods || []).forEach(m => collectPreFlightMeta(m, fName, node.name));
+        (node.fields || []).forEach(f => { if (f.init) collectPreFlightMeta(f.init, fName, node.name); });
+        (node.states || []).forEach(st => {
+          Object.values(st.handlers || {}).forEach(h => collectPreFlightMeta(h.body, fName, node.name));
+        });
+        (node.entityTimers || []).forEach(et => {
+          collectPreFlightMeta(et.msExpr, fName, node.name);
+          collectPreFlightMeta(et.body, fName, node.name);
+        });
+        return;
+      }
+      if (node.type === 'ClassDecl' && node.superName) {
+        referencedIdents.add(node.superName);
+      }
+      if (node.type === 'Ident' && node.name !== inOwnEntityDeclName) {
+        referencedIdents.add(node.name);
+      }
+      for (const k of Object.keys(node)) {
+        const v = node[k];
+        if (Array.isArray(v)) v.forEach(item => collectPreFlightMeta(item, fName, inOwnEntityDeclName));
+        else if (v && typeof v === 'object' && v.type) collectPreFlightMeta(v, fName, inOwnEntityDeclName);
+      }
+    }
+
     let curFile = ast.fileName || 'main.roy';
+    collectPreFlightMeta(ast, curFile, null);
+
     const warnings = [];
     const baseScope = new Set(KNOWN_RUNTIME_GLOBALS);
     (assetManifest || []).forEach(a => baseScope.add(a.alias));
     collectDeclaredInStmts(ast.body, baseScope);
+
+    function suggestFromSet(name, candidatesSet) {
+      const target = String(name || '');
+      const lower = target.toLowerCase();
+      let best = '';
+      let bestScore = Infinity;
+      candidatesSet.forEach(cand => {
+        if (!cand || cand === target) return;
+        const d = levenshteinDist(lower, String(cand).toLowerCase());
+        const maxAllow = Math.max(2, Math.floor(Math.max(target.length, String(cand).length) * 0.5));
+        if (d <= maxAllow && d < bestScore) { bestScore = d; best = cand; }
+      });
+      return best;
+    }
 
     function lintWalk(node, fName, scopeSet) {
       if (!node || typeof node !== 'object') return;
@@ -1402,7 +1543,7 @@ export const RoyLang = (function() {
         (node.body || []).forEach(s => lintWalk(s, mf, modScope));
         return;
       }
-      if (node.type === 'FnDecl' || node.type === 'FnExpr') {
+      if (node.type === 'FnDecl' || node.type === 'FnExpr' || node.type === 'TaskDecl') {
         if (node.usedJsFunction) {
           warnings.push(`[${fName}:${node.line}] В RoyLang принято писать "fn" вместо "function" (работает как алиас)`);
         }
@@ -1418,6 +1559,18 @@ export const RoyLang = (function() {
         if (node.initMethod) lintWalk(node.initMethod, fName, clsScope);
         (node.methods || []).forEach(m => lintWalk(m, fName, clsScope));
         (node.fields || []).forEach(f => { if (f.init) lintWalk(f.init, fName, clsScope); });
+        (node.states || []).forEach(st => {
+          Object.values(st.handlers || {}).forEach(h => {
+            const stScope = new Set(clsScope);
+            addParamNames(h.params, stScope);
+            if (h.body && h.body.stmts) collectDeclaredInStmts(h.body.stmts, stScope);
+            lintWalk(h.body, fName, stScope);
+          });
+        });
+        (node.entityTimers || []).forEach(et => {
+          lintWalk(et.msExpr, fName, clsScope);
+          lintWalk(et.body, fName, clsScope);
+        });
         return;
       }
       if (node.type === 'OnHook') {
@@ -1453,6 +1606,7 @@ export const RoyLang = (function() {
         return;
       }
       if (node.type === 'Call') {
+        const chain = calleeChainName(node.callee);
         if (node.callee && node.callee.type === 'Ident') {
           const cn = node.callee.name;
           if (cn === 'random') {
@@ -1464,7 +1618,15 @@ export const RoyLang = (function() {
             warnings.push(`[${fName}:${node.line}] Неизвестная функция "${cn}"${sug ? `. Возможно, имелось в виду "${sug}"?` : ''}`);
           }
         }
-        if (calleeChainName(node.callee) === 'textStroke' && node.args && node.args[3] && node.args[3].type === 'Literal' && typeof node.args[3].value === 'number') {
+        if ((chain === 'goto' || chain === 'pushScene' || chain === 'scene.goto' || chain === 'scene.is') &&
+            node.args && node.args[0] && node.args[0].type === 'Literal' && typeof node.args[0].value === 'string') {
+          const targetSc = node.args[0].value;
+          if (!declaredScenes.has(targetSc)) {
+            const sugSc = suggestFromSet(targetSc, declaredScenes);
+            warnings.push(`[${fName}:${node.line}] Сцена "${targetSc}" не объявлена в хуках on ... "${targetSc}"${sugSc ? `. Возможно, имелось в виду "${sugSc}"?` : ''}`);
+          }
+        }
+        if (chain === 'textStroke' && node.args && node.args[3] && node.args[3].type === 'Literal' && typeof node.args[3].value === 'number') {
           warnings.push(`[${fName}:${node.line}] В textStroke 4-й аргумент — цвет текста (или объект { color, stroke, size }), а size идёт 6-м`);
         }
       } else if ((node.type === 'NewExpr' || node.type === 'SpawnExpr') && node.ctorExpr && node.ctorExpr.type === 'Ident') {
@@ -1481,9 +1643,16 @@ export const RoyLang = (function() {
       }
     }
     lintWalk(ast, curFile, baseScope);
+    declaredLocalEntities.forEach(entInfo => {
+      if (!referencedIdents.has(entInfo.name)) {
+        warnings.push(`[${entInfo.file}:${entInfo.line}] Сущность "${entInfo.name}" объявлена, но нигде не создаётся (spawn ${entInfo.name}(...))`);
+      }
+    });
 
     let seq = 0;
     const nextTmp = (p) => `__roy_${p}_${++seq}`;
+    let emitTaskDepth = 0;
+    let emitInEntityMethod = false;
 
     function emitParams(params) {
       return (params || []).map(p => {
@@ -1568,8 +1737,15 @@ export const RoyLang = (function() {
         case 'NewExpr': return `new (${emitExpr(node.ctorExpr)})(${node.args.map(a => emitExpr(a)).join(', ')})`;
         case 'SpawnExpr': return `__rt.spawn(new (${emitExpr(node.ctorExpr)})(${node.args.map(a => emitExpr(a)).join(', ')}))`;
         case 'FnExpr': {
+          const prevTask = emitTaskDepth;
+          const prevEnt = emitInEntityMethod;
+          emitTaskDepth = 0;
+          emitInEntityMethod = false;
           const fnAsync = astHasAwait(node.body);
-          return `(${fnAsync ? 'async ' : ''}function(${emitParams(node.params)}) ${emitBlock(node.body)})`;
+          const codeStr = `(${fnAsync ? 'async ' : ''}function(${emitParams(node.params)}) ${emitBlock(node.body)})`;
+          emitTaskDepth = prevTask;
+          emitInEntityMethod = prevEnt;
+          return codeStr;
         }
         case 'Call': {
           const callStr = `${emitExpr(node.callee)}(${node.args.map(a => emitExpr(a)).join(', ')})`;
@@ -1585,7 +1761,7 @@ export const RoyLang = (function() {
 
     function locTag(s) {
       if (!s || !s.line) return '';
-      if (s.type === 'ModuleScope' || s.type === 'ImportBinding' || s.type === 'EnumDecl' || s.type === 'FnDecl' || s.type === 'ClassDecl' || s.type === 'EntityDecl') return '';
+      if (s.type === 'ModuleScope' || s.type === 'ImportBinding' || s.type === 'ReExportDecl' || s.type === 'LocalExportList' || s.type === 'EnumDecl' || s.type === 'FnDecl' || s.type === 'TaskDecl' || s.type === 'ClassDecl' || s.type === 'EntityDecl') return '';
       return `__rt._loc = ${JSON.stringify(curFile + ':' + s.line)}; `;
     }
 
@@ -1593,16 +1769,55 @@ export const RoyLang = (function() {
       return `{\n${blockNode.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')}\n}`;
     }
 
+    function emitStatesSetup(statesList) {
+      if (!statesList || statesList.length === 0) return '';
+      const defName = statesList[0].name;
+      const entriesJs = statesList.map(st => {
+        const hEntries = Object.keys(st.handlers || {}).map(hk => {
+          const h = st.handlers[hk];
+          const isAsync = astHasAwait(h.body);
+          const prevEnt = emitInEntityMethod;
+          const prevTask = emitTaskDepth;
+          emitInEntityMethod = true;
+          emitTaskDepth = 0;
+          const fnCode = `${isAsync ? 'async ' : ''}(${emitParams(h.params)}) => ${emitBlock(h.body)}`;
+          emitInEntityMethod = prevEnt;
+          emitTaskDepth = prevTask;
+          return `${JSON.stringify(hk)}: ${fnCode}`;
+        });
+        return `${JSON.stringify(st.name)}: { ${hEntries.join(', ')} }`;
+      });
+      return `this.state = ${JSON.stringify(defName)};\nthis.stateTime = 0;\nthis._states = { ${entriesJs.join(', ')} };`;
+    }
+
+    function emitEntityTimersSetup(timerList) {
+      if (!timerList || timerList.length === 0) return '';
+      const prevEnt = emitInEntityMethod;
+      emitInEntityMethod = true;
+      const code = timerList.map(t => {
+        const isAsync = astHasAwait(t.body);
+        const fnKind = t.type === 'EveryHook' ? 'every' : 'after';
+        return `__rt.${fnKind}(${emitExpr(t.msExpr)}, ${isAsync ? 'async ' : ''}() => ${emitBlock(t.body)}, this);`;
+      }).join('\n');
+      emitInEntityMethod = prevEnt;
+      return code;
+    }
+
     function emitStmt(node) {
       if (!node) return '';
       switch (node.type) {
         case 'Block': return emitBlock(node);
+        case 'ReExportDecl':
+        case 'LocalExportList':
+          return '';
         case 'ModuleScope': {
           const prevF = curFile;
           if (node.fileName) curFile = node.fileName;
           const innerCode = node.body.map(s => emitStmt(s)).join('\n');
           curFile = prevF;
-          const expObj = `{ ${node.exportsList.map(n => `${JSON.stringify(n)}: ${n}`).join(', ')} }`;
+          const ownPairs = (node.exportsList || []).map(n => `${JSON.stringify(n)}: ${n}`);
+          const rePairs = (node.reExports || []).map(re => `${JSON.stringify(re.exportName)}: ${re.sourceModVar}[${JSON.stringify(re.sourceName)}]`);
+          const expObj = `{ ${ownPairs.concat(rePairs).join(', ')} }`;
           const hasAsyncMod = node.body.some(s => astHasAwait(s));
           const fnWrap = hasAsyncMod
             ? `(await (async function(){\n${innerCode}\nreturn ${expObj};\n})())`
@@ -1634,8 +1849,25 @@ export const RoyLang = (function() {
           return `${kw} ${node.name} = ${node.init ? emitExpr(node.init) : 'null'};`;
         }
         case 'FnDecl': {
+          const prevTask = emitTaskDepth;
+          const prevEnt = emitInEntityMethod;
+          emitTaskDepth = 0;
+          emitInEntityMethod = false;
           const isAsync = asyncFnNames.has(node.name) || astHasAwait(node.body);
-          return `${isAsync ? 'async ' : ''}function ${node.name}(${emitParams(node.params)}) ${emitBlock(node.body)}`;
+          const out = `${isAsync ? 'async ' : ''}function ${node.name}(${emitParams(node.params)}) ${emitBlock(node.body)}`;
+          emitTaskDepth = prevTask;
+          emitInEntityMethod = prevEnt;
+          return out;
+        }
+        case 'TaskDecl': {
+          const prevTask = emitTaskDepth;
+          const prevEnt = emitInEntityMethod;
+          emitTaskDepth = 1;
+          emitInEntityMethod = false;
+          const inner = emitBlock(node.body);
+          emitTaskDepth = prevTask;
+          emitInEntityMethod = prevEnt;
+          return `function ${node.name}(${emitParams(node.params)}) { return __rt._runTask(null, async function(__royTask) ${inner}); }`;
         }
         case 'EnumDecl': {
           let counter = 0;
@@ -1654,17 +1886,39 @@ export const RoyLang = (function() {
           const superStmt = node.superName ? `super(${superArgs}); ` : '';
           const assignParams = node.ctorParams.filter(p => p.name).map(p => `this[${JSON.stringify(p.name)}] = ${p.name};`).join(' ');
           const fieldInits = node.fields.map(f => `this[${JSON.stringify(f.name)}] = ${f.init ? emitExpr(f.init) : 'null'};`).join(' ');
+          const statesInit = emitStatesSetup(node.states);
           const initCall = node.initMethod ? `this.init(${superArgs});` : '';
+          const defaultEnterCall = (node.states && node.states.length > 0)
+            ? `if (this.state === ${JSON.stringify(node.states[0].name)} && this._states[this.state] && typeof this._states[this.state].enter === 'function') this._states[this.state].enter();`
+            : '';
+          const timersInit = emitEntityTimersSetup(node.entityTimers);
           const methodsOut = [];
+          const prevEnt = emitInEntityMethod;
+          const prevTask = emitTaskDepth;
+          emitInEntityMethod = true;
           if (node.initMethod) {
+            emitTaskDepth = 0;
             methodsOut.push(`init(${emitParams(node.initMethod.params)}) ${emitBlock(node.initMethod.body)}`);
           }
           node.methods.forEach(m => {
-            const mAsync = astHasAwait(m.body);
-            methodsOut.push(`${mAsync ? 'async ' : ''}${m.name}(${emitParams(m.params)}) ${emitBlock(m.body)}`);
+            if (m.isTask) {
+              emitTaskDepth = 1;
+              const inner = emitBlock(m.body);
+              emitTaskDepth = 0;
+              methodsOut.push(`${m.name}(${emitParams(m.params)}) { const __royOwner = this; return __rt._runTask(__royOwner, async (__royTask) => ${inner}); }`);
+            } else {
+              emitTaskDepth = 0;
+              const mAsync = astHasAwait(m.body);
+              methodsOut.push(`${mAsync ? 'async ' : ''}${m.name}(${emitParams(m.params)}) ${emitBlock(m.body)}`);
+            }
           });
+          if (node.states && node.states.length > 0 && !node.superName) {
+            methodsOut.push(`setState(nextName, ...args) { return __rt.setState(this, nextName, ...args); }`);
+          }
+          emitInEntityMethod = prevEnt;
+          emitTaskDepth = prevTask;
           const extClause = node.superName ? ` extends ${node.superName}` : '';
-          return `class ${node.name}${extClause} {\nconstructor(${ctorParamList}) {\n${superStmt}${assignParams}\n${fieldInits}\n${initCall}\n}\n${methodsOut.join('\n')}\n}`;
+          return `class ${node.name}${extClause} {\nconstructor(${ctorParamList}) {\n${superStmt}${assignParams}\n${fieldInits}\n${statesInit}\n${initCall}\n${defaultEnterCall}\n${timersInit}\n}\n${methodsOut.join('\n')}\n}`;
         }
         case 'EntityDecl': {
           const ctorParamList = emitParams(node.ctorParams);
@@ -1673,26 +1927,45 @@ export const RoyLang = (function() {
           const superCall = node.superName ? `super(${superArgs}); this.tag = ${JSON.stringify(node.name)};` : `super(${JSON.stringify(node.name)});`;
           const assignParams = node.ctorParams.filter(p => p.name).map(p => `this[${JSON.stringify(p.name)}] = ${p.name};`).join(' ');
           const fieldInits = node.fields.map(f => `this[${JSON.stringify(f.name)}] = ${f.init ? emitExpr(f.init) : 'null'};`).join(' ');
+          const statesInit = emitStatesSetup(node.states);
           const initCall = node.initMethod ? `this.init(${superArgs});` : '';
+          const defaultEnterCall = (node.states && node.states.length > 0)
+            ? `if (this.state === ${JSON.stringify(node.states[0].name)} && this._states[this.state] && typeof this._states[this.state].enter === 'function') this._states[this.state].enter();`
+            : '';
+          const timersInit = emitEntityTimersSetup(node.entityTimers);
           const methodsOut = [];
+          const prevEnt = emitInEntityMethod;
+          const prevTask = emitTaskDepth;
+          emitInEntityMethod = true;
           if (node.initMethod) {
+            emitTaskDepth = 0;
             methodsOut.push(`init(${emitParams(node.initMethod.params)}) ${emitBlock(node.initMethod.body)}`);
           }
           node.methods.forEach(m => {
-            const mAsync = astHasAwait(m.body);
-            methodsOut.push(`${mAsync ? 'async ' : ''}${m.name}(${emitParams(m.params)}) ${emitBlock(m.body)}`);
+            if (m.isTask) {
+              emitTaskDepth = 1;
+              const inner = emitBlock(m.body);
+              emitTaskDepth = 0;
+              methodsOut.push(`${m.name}(${emitParams(m.params)}) { const __royOwner = this; return __rt._runTask(__royOwner, async (__royTask) => ${inner}); }`);
+            } else {
+              emitTaskDepth = 0;
+              const mAsync = astHasAwait(m.body);
+              methodsOut.push(`${mAsync ? 'async ' : ''}${m.name}(${emitParams(m.params)}) ${emitBlock(m.body)}`);
+            }
           });
-          return `class ${node.name} extends ${baseName} {\nconstructor(${ctorParamList}) {\n${superCall}\n${assignParams}\n${fieldInits}\n${initCall}\n}\n${methodsOut.join('\n')}\n}`;
+          emitInEntityMethod = prevEnt;
+          emitTaskDepth = prevTask;
+          return `class ${node.name} extends ${baseName} {\nconstructor(${ctorParamList}) {\n${superCall}\n${assignParams}\n${fieldInits}\n${statesInit}\n${initCall}\n${defaultEnterCall}\n${timersInit}\n}\n${methodsOut.join('\n')}\n}`;
         }
         case 'OnHook': {
           const isAsync = astHasAwait(node.body);
           let normEv = node.event;
           if (normEv === 'drawui' || normEv === 'draw_ui') normEv = 'drawUi';
-          const evKey = (normEv === 'enter' || normEv === 'exit') && node.sceneFilter
+          const evKey = (normEv === 'enter' || normEv === 'exit' || normEv === 'resume') && node.sceneFilter
             ? `${normEv}:${node.sceneFilter}`
             : normEv;
           const regSceneCall = node.sceneFilter ? `__rt._regScene(${JSON.stringify(node.sceneFilter)}); ` : '';
-          const filterGuard = (node.sceneFilter && normEv !== 'enter' && normEv !== 'exit')
+          const filterGuard = (node.sceneFilter && normEv !== 'enter' && normEv !== 'exit' && normEv !== 'resume')
             ? `if (__rt.scene.name !== ${JSON.stringify(node.sceneFilter)}) return;\n`
             : '';
           const bodyJs = `{\n${filterGuard}${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')}\n}`;
@@ -1700,10 +1973,16 @@ export const RoyLang = (function() {
         }
         case 'AfterHook': {
           const isAsync = astHasAwait(node.body);
+          if (emitInEntityMethod) {
+            return `__rt.after(${emitExpr(node.msExpr)}, ${isAsync ? 'async ' : ''}() => ${emitBlock(node.body)}, this);`;
+          }
           return `__rt.after(${emitExpr(node.msExpr)}, ${isAsync ? 'async ' : ''}function() ${emitBlock(node.body)});`;
         }
         case 'EveryHook': {
           const isAsync = astHasAwait(node.body);
+          if (emitInEntityMethod) {
+            return `__rt.every(${emitExpr(node.msExpr)}, ${isAsync ? 'async ' : ''}() => ${emitBlock(node.body)}, this);`;
+          }
           return `__rt.every(${emitExpr(node.msExpr)}, ${isAsync ? 'async ' : ''}function() ${emitBlock(node.body)});`;
         }
         case 'If': {
@@ -1716,31 +1995,42 @@ export const RoyLang = (function() {
         case 'MatchStmt':
           return emitMatchBody(node, false);
         case 'While':
-          return `while (${emitExpr(node.cond)}) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} }`;
+          return `while (${emitExpr(node.cond)}) { ${emitTaskDepth > 0 ? 'if (__rt._isTaskDead(__royTask)) return; ' : ''}if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} }`;
         case 'ForRange': {
           const eVar = nextTmp('end');
           const cmp = node.inclusive ? '<=' : '<';
-          return `{ const ${eVar} = ${emitExpr(node.end)}; for (let ${node.varName} = ${emitExpr(node.start)}; ${node.varName} ${cmp} ${eVar}; ${node.varName}++) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${eVar} = ${emitExpr(node.end)}; for (let ${node.varName} = ${emitExpr(node.start)}; ${node.varName} ${cmp} ${eVar}; ${node.varName}++) { ${emitTaskDepth > 0 ? 'if (__rt._isTaskDead(__royTask)) return; ' : ''}if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'ForEach': {
           const colVar = nextTmp('col');
-          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterList = Array.isArray(${colVar}) ? ${colVar} : (${colVar} && typeof ${colVar} === 'object' ? Object.keys(${colVar}) : []); for (const ${node.varName} of __iterList) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterList = Array.isArray(${colVar}) ? ${colVar} : (${colVar} && typeof ${colVar} === 'object' ? Object.keys(${colVar}) : []); for (const ${node.varName} of __iterList) { ${emitTaskDepth > 0 ? 'if (__rt._isTaskDead(__royTask)) return; ' : ''}if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'ForEntries': {
           const colVar = nextTmp('col');
-          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterEnt = Array.isArray(${colVar}) ? ${colVar}.map((__v, __i) => [__i, __v]) : (${colVar} && typeof ${colVar} === 'object' ? Object.entries(${colVar}) : []); for (const [${node.keyName}, ${node.valName}] of __iterEnt) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterEnt = Array.isArray(${colVar}) ? ${colVar}.map((__v, __i) => [__i, __v]) : (${colVar} && typeof ${colVar} === 'object' ? Object.entries(${colVar}) : []); for (const [${node.keyName}, ${node.valName}] of __iterEnt) { ${emitTaskDepth > 0 ? 'if (__rt._isTaskDead(__royTask)) return; ' : ''}if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'Repeat': {
           const cntVar = nextTmp('rep');
           const idxVar = nextTmp('i');
-          return `{ const ${cntVar} = Math.max(0, Math.floor(${emitExpr(node.countExpr)})); for (let ${idxVar} = 0; ${idxVar} < ${cntVar}; ${idxVar}++) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${cntVar} = Math.max(0, Math.floor(${emitExpr(node.countExpr)})); for (let ${idxVar} = 0; ${idxVar} < ${cntVar}; ${idxVar}++) { ${emitTaskDepth > 0 ? 'if (__rt._isTaskDead(__royTask)) return; ' : ''}if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'DeleteStmt': return `delete ${emitExpr(node.target)};`;
         case 'Return':
           return node.value ? `return ${emitExpr(node.value)};` : 'return;';
         case 'Break': return 'break;';
         case 'Continue': return 'continue;';
-        case 'ExprStmt': return `${emitExpr(node.expr)};`;
+        case 'ExprStmt': {
+          if (emitTaskDepth > 0) {
+            const waitCall = (node.expr && node.expr.type === 'Call' && node.expr.callee && node.expr.callee.type === 'Ident' && node.expr.callee.name === 'wait')
+              ? node.expr
+              : (node.expr && node.expr.type === 'Await' && node.expr.arg && node.expr.arg.type === 'Call' && node.expr.arg.callee && node.expr.arg.callee.type === 'Ident' && node.expr.arg.callee.name === 'wait' ? node.expr.arg : null);
+            if (waitCall) {
+              const argsStr = waitCall.args.map(a => emitExpr(a)).join(', ');
+              return `{ await __rt._taskWait(__royTask${argsStr ? ', ' + argsStr : ''}); if (__rt._isTaskDead(__royTask)) return; }`;
+            }
+          }
+          return `${emitExpr(node.expr)};`;
+        }
         default:
           throw compileError('Неподдерживаемая инструкция: ' + node.type, node.line || 1, node.col || 1);
       }
@@ -1776,23 +2066,96 @@ export const RoyLang = (function() {
 
     function collectExportsFromBody(body) {
       const names = [];
+      const localDeclared = new Set();
       (body || []).forEach(st => {
-        if (!st || !st.exported) return;
-        if (st.type === 'FnDecl' || st.type === 'EntityDecl' || st.type === 'ClassDecl' || st.type === 'EnumDecl') {
-          names.push(st.name);
+        if (!st) return;
+        if (st.type === 'FnDecl' || st.type === 'TaskDecl' || st.type === 'EntityDecl' || st.type === 'ClassDecl' || st.type === 'EnumDecl') {
+          if (st.name) localDeclared.add(st.name);
         } else if (st.type === 'VarDecl') {
-          if (st.name) names.push(st.name);
-          else if (st.pattern && st.pattern.type === 'ArrayPat') st.pattern.elements.forEach(e => names.push(e.name));
-          else if (st.pattern && st.pattern.type === 'ObjectPat') st.pattern.props.forEach(p => names.push(p.alias));
+          if (st.name) localDeclared.add(st.name);
+          else if (st.pattern && st.pattern.type === 'ArrayPat') st.pattern.elements.forEach(e => localDeclared.add(e.name));
+          else if (st.pattern && st.pattern.type === 'ObjectPat') st.pattern.props.forEach(p => localDeclared.add(p.alias));
+        }
+        if (st.exported) {
+          if (st.type === 'FnDecl' || st.type === 'TaskDecl' || st.type === 'EntityDecl' || st.type === 'ClassDecl' || st.type === 'EnumDecl') {
+            names.push(st.name);
+          } else if (st.type === 'VarDecl') {
+            if (st.name) names.push(st.name);
+            else if (st.pattern && st.pattern.type === 'ArrayPat') st.pattern.elements.forEach(e => names.push(e.name));
+            else if (st.pattern && st.pattern.type === 'ObjectPat') st.pattern.props.forEach(p => names.push(p.alias));
+          }
+        }
+      });
+      (body || []).forEach(st => {
+        if (st && st.type === 'LocalExportList') {
+          (st.specifiers || []).forEach(sp => {
+            if (localDeclared.has(sp.name) && names.indexOf(sp.name) < 0) names.push(sp.name);
+          });
         }
       });
       return names;
     }
 
-    function resolveAstImports(astNode, currentFile, isTopEntry) {
+    function ensureModuleCompiled(targetFile, st, currentFile) {
+      if (moduleCache[targetFile]) return moduleCache[targetFile];
+      visiting.add(targetFile);
+      const mAst = parse(filesMap[targetFile].content, targetFile);
+      (mAst.assetBlocks || []).forEach(ab => collectedAssets.push(...ab.entries));
+      const reExports = [];
+      const resolvedBody = resolveAstImports(mAst, targetFile, false, reExports);
+      visiting.delete(targetFile);
+      const ownExports = collectExportsFromBody(mAst.body);
+      const allExportedNames = ownExports.slice();
+      reExports.forEach(re => {
+        if (allExportedNames.indexOf(re.exportName) < 0) allExportedNames.push(re.exportName);
+      });
+      const modVar = `__royMod_${++modSeq}`;
+      moduleCache[targetFile] = { modVar, exportsList: allExportedNames };
+      hoistedModuleScopes.push({
+        type: 'ModuleScope',
+        fileName: targetFile,
+        modVar,
+        body: resolvedBody,
+        exportsList: ownExports,
+        reExports,
+        line: st.line,
+        col: st.col
+      });
+      return moduleCache[targetFile];
+    }
+
+    function resolveAstImports(astNode, currentFile, isTopEntry, collectorReExports = null) {
       const outStmts = [];
       for (const st of astNode.body) {
-        if (!st || st.type !== 'ImportDecl') {
+        if (!st) continue;
+        if (st.type === 'ReExportDecl') {
+          const targetFile = resolveImportFile(currentFile, st.path, filesMap);
+          if (!targetFile) {
+            throw compileError(`Модуль "${st.path}" не найден в проекте`, st.line, st.col, currentFile);
+          }
+          if (visiting.has(targetFile)) {
+            throw compileError(`Обнаружен циклический импорт модуля "${targetFile}"`, st.line, st.col, currentFile);
+          }
+          const cached = ensureModuleCompiled(targetFile, st, currentFile);
+          if (st.mode === 'named') {
+            st.specifiers.forEach(sp => {
+              if (!cached.exportsList.includes(sp.name)) {
+                throw compileError(`Модуль "${targetFile}" не экспортирует "${sp.name}" (для re-export)`, st.line, st.col, currentFile);
+              }
+              if (collectorReExports) {
+                collectorReExports.push({ exportName: sp.alias, sourceModVar: cached.modVar, sourceName: sp.name });
+              }
+            });
+          } else if (st.mode === 'all') {
+            cached.exportsList.forEach(expName => {
+              if (collectorReExports) {
+                collectorReExports.push({ exportName: expName, sourceModVar: cached.modVar, sourceName: expName });
+              }
+            });
+          }
+          continue;
+        }
+        if (st.type !== 'ImportDecl') {
           outStmts.push(st);
           continue;
         }
@@ -1815,18 +2178,7 @@ export const RoyLang = (function() {
             outStmts.push(...innerStmts);
           }
         } else {
-          if (!moduleCache[targetFile]) {
-            visiting.add(targetFile);
-            const mAst = parse(filesMap[targetFile].content, targetFile);
-            (mAst.assetBlocks || []).forEach(ab => collectedAssets.push(...ab.entries));
-            const resolvedBody = resolveAstImports(mAst, targetFile, false);
-            visiting.delete(targetFile);
-            const exportsList = collectExportsFromBody(mAst.body);
-            const modVar = `__royMod_${++modSeq}`;
-            moduleCache[targetFile] = { modVar, exportsList };
-            outStmts.push({ type: 'ModuleScope', fileName: targetFile, modVar, body: resolvedBody, exportsList, line: st.line, col: st.col });
-          }
-          const cached = moduleCache[targetFile];
+          const cached = ensureModuleCompiled(targetFile, st, currentFile);
           if (st.mode === 'named') {
             st.specifiers.forEach(sp => {
               if (!cached.exportsList.includes(sp.name)) {
@@ -1853,7 +2205,7 @@ export const RoyLang = (function() {
       type: 'Program',
       fileName: entryNorm,
       gameHeader: entryAst.gameHeader,
-      body: entryResolvedStmts
+      body: [...hoistedModuleScopes, ...entryResolvedStmts]
     };
 
     const assetMap = {};
@@ -1971,10 +2323,14 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var noiseBuffer = null;
   var audioMuted = false;
   var tabMuted = false;
-  var bgmState = { timer: null, tracks: [], drums: [], step: 0, nextTime: 0, stepSec: 0.125, vol: 0.055, key: '', bus: null };
+  var bgmState = { timer: null, tracks: [], drums: [], step: 0, nextTime: 0, stepSec: 0.125, vol: 0.055, key: '', bus: null, masterGain: null, sections: null, lastCfg: null };
   var runtimeErrorBanner = '';
   var lastLoopTicks = 0;
   var telemetryTimer = 0;
+  var sceneStack = [];
+  var activeTasks = [];
+  var taskWaiters = [];
+  var shockwaves = [];
 
   if (${JSON.stringify(gamepadOpt)} !== null) {
     try { window.parent.postMessage({ type: 'roy-gamepad-config', visible: !!${JSON.stringify(gamepadOpt)} }, '*'); } catch(e) {}
@@ -2098,7 +2454,36 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return masterComp || (audioCtx && audioCtx.destination) || null;
   }
 
-  function tone(freq, durMsOrSec, wave, vol, slideToFreq) {
+  function calcSpatialAudio(opts) {
+    if (!opts || typeof opts !== 'object') return { gain: 1, pan: 0, audible: true };
+    var panVal = opts.pan !== undefined ? Math.max(-1, Math.min(1, Number(opts.pan) || 0)) : 0;
+    var gainMul = 1;
+    if (opts.x !== undefined || opts.y !== undefined) {
+      var lx = cam.x + W * 0.5, ly = cam.y + H * 0.5;
+      var sx = opts.x !== undefined ? Number(opts.x) : lx;
+      var sy = opts.y !== undefined ? Number(opts.y) : ly;
+      var dx = sx - lx, dy = sy - ly;
+      var maxD = Math.max(80, Number(opts.maxDist) || Math.max(W, H) * 0.85);
+      var d = Math.hypot(dx, dy);
+      if (d >= maxD) return { gain: 0, pan: 0, audible: false };
+      gainMul = Math.max(0.02, 1 - d / maxD);
+      if (opts.pan === undefined) panVal = Math.max(-1, Math.min(1, dx / Math.max(120, W * 0.55)));
+    }
+    return { gain: gainMul, pan: panVal, audible: gainMul > 0.015 };
+  }
+
+  function routeAudioOutput(node, dest, panVal) {
+    if (panVal && Math.abs(panVal) > 0.01 && audioCtx && audioCtx.createStereoPanner) {
+      var panner = audioCtx.createStereoPanner();
+      panner.pan.setValueAtTime(Math.max(-1, Math.min(1, panVal)), audioCtx.currentTime);
+      node.connect(panner);
+      panner.connect(dest);
+    } else {
+      node.connect(dest);
+    }
+  }
+
+  function tone(freq, durMsOrSec, wave, vol, slideToFreq, panVal) {
     if (audioMuted || tabMuted) return;
     try {
       var dest = ensureAudioMaster();
@@ -2119,31 +2504,98 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       gain.gain.setValueAtTime(volume, nowT);
       gain.gain.exponentialRampToValueAtTime(0.001, nowT + dur);
       osc.connect(gain);
-      gain.connect(dest);
+      routeAudioOutput(gain, dest, panVal || 0);
       osc.start(nowT);
       osc.stop(nowT + dur);
     } catch(e) {}
   }
 
-  function melody(notes, stepMs, wave) {
+  function synth(opts) {
+    if (audioMuted || tabMuted) return;
+    var o = (opts && typeof opts === 'object') ? opts : {};
+    var sp = calcSpatialAudio(o);
+    if (!sp.audible) return;
+    try {
+      var dest = ensureAudioMaster();
+      if (!audioCtx || !dest) return;
+      if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') audioCtx.resume().catch(function(){});
+      var nowT = audioCtx.currentTime;
+      var rawD = o.dur !== undefined ? Number(o.dur) : (o.duration !== undefined ? Number(o.duration) : 0.18);
+      var dur = Math.max(0.02, rawD > 5 ? rawD / 1000 : rawD);
+      var att = Math.max(0.002, Math.min(dur * 0.5, Number(o.attack !== undefined ? o.attack : 0.008)));
+      var dec = Math.max(0.005, Math.min(dur * 0.6, Number(o.decay !== undefined ? o.decay : dur * 0.3)));
+      var sus = Math.max(0.01, Math.min(1, Number(o.sustain !== undefined ? o.sustain : 0.35)));
+      var peak = Math.max(0.003, Math.min(0.65, (o.vol !== undefined ? Number(o.vol) : 0.1) * sp.gain));
+      var outGain = audioCtx.createGain();
+      outGain.gain.setValueAtTime(0.0005, nowT);
+      outGain.gain.linearRampToValueAtTime(peak, nowT + att);
+      outGain.gain.exponentialRampToValueAtTime(Math.max(0.001, peak * sus), nowT + Math.min(dur * 0.85, att + dec));
+      outGain.gain.exponentialRampToValueAtTime(0.0005, nowT + dur);
+
+      var filterNode = null;
+      if (o.filter || o.cutoff) {
+        filterNode = audioCtx.createBiquadFilter();
+        filterNode.type = o.filterType || 'lowpass';
+        filterNode.frequency.setValueAtTime(Math.max(60, Math.min(18000, Number(o.filter || o.cutoff) || 1800)), nowT);
+        if (o.q !== undefined) filterNode.Q.setValueAtTime(Math.max(0.1, Math.min(20, Number(o.q) || 1)), nowT);
+        filterNode.connect(outGain);
+      }
+      var targetNode = filterNode || outGain;
+      routeAudioOutput(outGain, dest, sp.pan);
+
+      var noiseMix = Math.max(0, Math.min(1, Number(o.noise) || 0));
+      if (noiseMix < 0.99) {
+        var osc = audioCtx.createOscillator();
+        var oscGain = audioCtx.createGain();
+        osc.type = o.wave || 'sawtooth';
+        var f0 = Math.max(20, noteToFreq(o.freq !== undefined ? o.freq : 260));
+        osc.frequency.setValueAtTime(f0, nowT);
+        var fEnd = o.freqEnd !== undefined ? o.freqEnd : o.slide;
+        if (fEnd !== undefined && fEnd !== null) {
+          osc.frequency.exponentialRampToValueAtTime(Math.max(20, noteToFreq(fEnd)), nowT + dur);
+        }
+        oscGain.gain.setValueAtTime(1 - noiseMix * 0.65, nowT);
+        osc.connect(oscGain); oscGain.connect(targetNode);
+        osc.start(nowT); osc.stop(nowT + dur + 0.01);
+      }
+      if (noiseMix > 0 && noiseBuffer) {
+        var nSrc = audioCtx.createBufferSource();
+        var nGain = audioCtx.createGain();
+        nSrc.buffer = noiseBuffer;
+        nGain.gain.setValueAtTime(noiseMix, nowT);
+        nSrc.connect(nGain); nGain.connect(targetNode);
+        nSrc.start(nowT); nSrc.stop(nowT + dur + 0.01);
+      }
+    } catch(e) {}
+  }
+
+  function melody(notes, stepMs, wave, vol, pitchMul, panVal) {
     if (!Array.isArray(notes)) return;
     var step = Number(stepMs) || 140;
+    var pm = pitchMul || 1;
     notes.forEach(function(n, idx) {
       if (!n || n === '-' || n === '_') return;
-      setTimeout(function() { tone(n, Math.max(0.05, (step * 0.85) / 1000), wave || 'triangle'); }, idx * step);
+      setTimeout(function() { tone(noteToFreq(n) * pm, Math.max(0.05, (step * 0.85) / 1000), wave || 'triangle', vol, null, panVal); }, idx * step);
     });
   }
 
-  function sfx(name) {
+  function sfx(name, opts) {
+    var o = (opts && typeof opts === 'object') ? opts : {};
+    var sp = calcSpatialAudio(o);
+    if (!sp.audible) return;
+    var vMul = (o.vol !== undefined ? Number(o.vol) : 1) * sp.gain;
+    var pMul = o.pitch !== undefined ? Math.max(0.25, Math.min(4, Number(o.pitch) || 1)) : 1;
+    var pan = sp.pan;
+    var bv = 0.08 * vMul;
     var n = String(name || '').toLowerCase();
-    if (n === 'coin') { tone(987, 0.08, 'sine'); setTimeout(function(){ tone(1318, 0.12, 'sine'); }, 55); }
-    else if (n === 'jump') { tone(320, 0.09, 'triangle'); setTimeout(function(){ tone(520, 0.1, 'triangle'); }, 45); }
-    else if (n === 'hit' || n === 'hurt') { tone(140, 0.16, 'sawtooth'); }
-    else if (n === 'laser' || n === 'shoot') { tone(880, 0.06, 'sawtooth'); setTimeout(function(){ tone(420, 0.08, 'sawtooth'); }, 35); }
-    else if (n === 'explosion' || n === 'boom') { tone(95, 0.24, 'sawtooth'); setTimeout(function(){ tone(60, 0.28, 'square'); }, 60); }
-    else if (n === 'powerup') { melody(['C5','E5','G5','C6'], 65, 'triangle'); }
-    else if (n === 'win') { melody(['C5','E5','G5','C6'], 90, 'sine'); }
-    else { tone(620, 0.05, 'sine'); }
+    if (n === 'coin') { tone(987 * pMul, 0.08, 'sine', bv, null, pan); setTimeout(function(){ tone(1318 * pMul, 0.12, 'sine', bv, null, pan); }, 55); }
+    else if (n === 'jump') { tone(320 * pMul, 0.09, 'triangle', bv, 520 * pMul, pan); }
+    else if (n === 'hit' || n === 'hurt') { tone(140 * pMul, 0.16, 'sawtooth', bv * 1.1, 70 * pMul, pan); }
+    else if (n === 'laser' || n === 'shoot') { tone(880 * pMul, 0.09, 'sawtooth', bv, 320 * pMul, pan); }
+    else if (n === 'explosion' || n === 'boom') { synth({ wave: 'sawtooth', freq: 95 * pMul, freqEnd: 32, dur: 0.32, noise: 0.65, filter: 900, vol: bv * 1.35, pan: pan }); }
+    else if (n === 'powerup') { melody(['C5','E5','G5','C6'], 65, 'triangle', bv, pMul, pan); }
+    else if (n === 'win') { melody(['C5','E5','G5','C6'], 90, 'sine', bv, pMul, pan); }
+    else { tone(620 * pMul, 0.05, 'sine', bv, null, pan); }
   }
 
   function parseBgmNotes(seq) {
@@ -2151,20 +2603,39 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return String(seq || '').trim().split(/\\s+/);
   }
 
+  function expandChordNotes(tok) {
+    var s = String(tok || '').trim();
+    if (!s || s === '-' || s === '_' || s === '.') return [];
+    if (s.indexOf('+') >= 0) {
+      return s.split('+').map(function(p) { return noteToFreq(p.trim()); });
+    }
+    var cm = /^([a-gA-G][#bB]?)(m|min|dim|maj7|m7|7)(-?[0-9])$/.exec(s);
+    if (cm) {
+      var root = noteToFreq(cm[1] + cm[3]);
+      var q = cm[2].toLowerCase();
+      var semis = q === 'dim' ? [0, 3, 6] : (q === 'm' || q === 'min') ? [0, 3, 7] : (q === 'm7') ? [0, 3, 7, 10] : (q === 'maj7') ? [0, 4, 7, 11] : [0, 4, 7, 10];
+      return semis.map(function(st) { return root * Math.pow(2, st / 12); });
+    }
+    return [noteToFreq(s)];
+  }
+
   function scheduleBgmStep(noteStr, atTime, durSec, wave, vol, outNode) {
-    if (!noteStr || noteStr === '-' || noteStr === '_' || noteStr === '.') return;
-    if (!audioCtx || audioMuted || tabMuted) return;
+    var freqs = expandChordNotes(noteStr);
+    if (!freqs.length || !audioCtx || audioMuted || tabMuted) return;
+    var perVol = Math.max(0.002, vol / Math.max(1, Math.sqrt(freqs.length)));
     try {
-      var osc = audioCtx.createOscillator();
-      var gain = audioCtx.createGain();
-      osc.type = wave || 'triangle';
-      osc.frequency.setValueAtTime(Math.max(25, noteToFreq(noteStr)), atTime);
-      gain.gain.setValueAtTime(Math.max(0.002, vol), atTime);
-      gain.gain.exponentialRampToValueAtTime(0.0008, atTime + Math.max(0.04, durSec * 0.92));
-      osc.connect(gain);
-      gain.connect(outNode || masterComp || audioCtx.destination);
-      osc.start(atTime);
-      osc.stop(atTime + durSec);
+      for (var i = 0; i < freqs.length; i++) {
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.type = wave || 'triangle';
+        osc.frequency.setValueAtTime(Math.max(25, freqs[i]), atTime);
+        gain.gain.setValueAtTime(perVol, atTime);
+        gain.gain.exponentialRampToValueAtTime(0.0008, atTime + Math.max(0.04, durSec * 0.92));
+        osc.connect(gain);
+        gain.connect(outNode || masterComp || audioCtx.destination);
+        osc.start(atTime);
+        osc.stop(atTime + durSec);
+      }
     } catch(e) {}
   }
 
@@ -2223,30 +2694,40 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   function stopBgm() {
     if (bgmState.timer) { clearInterval(bgmState.timer); bgmState.timer = null; }
+    if (bgmState.masterGain) { try { bgmState.masterGain.disconnect(); } catch(e) {} bgmState.masterGain = null; }
     if (bgmState.bus) { try { bgmState.bus.disconnect(); } catch(e) {} bgmState.bus = null; }
     bgmState.tracks = [];
     bgmState.drums = [];
     bgmState.key = '';
   }
 
-  function bgm(patterns, bpm, wave, vol, opts) {
-    var cfg = (opts && typeof opts === 'object') ? opts : ((patterns && typeof patterns === 'object' && !Array.isArray(patterns)) ? patterns : {});
-    var sig = JSON.stringify([patterns, bpm, wave, vol, opts]);
-    if (bgmState.timer && bgmState.key === sig) return;
+  function bgm(patterns, bpm, wave, vol, opts, fadeInSec) {
+    var activePatterns = patterns;
+    if (patterns && typeof patterns === 'object' && !Array.isArray(patterns) && patterns.sections) {
+      bgmState.sections = patterns.sections;
+      var secKey = patterns.current || Object.keys(patterns.sections)[0];
+      activePatterns = patterns.sections[secKey] || {};
+      if (!bpm && activePatterns.bpm) bpm = activePatterns.bpm;
+    }
+    var cfg = (opts && typeof opts === 'object') ? opts : ((activePatterns && typeof activePatterns === 'object' && !Array.isArray(activePatterns)) ? activePatterns : {});
+    var sig = JSON.stringify([activePatterns, bpm, wave, vol, opts]);
+    if (bgmState.timer && bgmState.key === sig && !fadeInSec) return;
     stopBgm();
+    bgmState.lastCfg = { patterns: activePatterns, bpm: bpm, wave: wave, vol: vol, opts: opts };
     var trackList = [];
     var drumList = [];
     var baseVol = vol === undefined ? 0.05 : Math.max(0.005, Math.min(0.4, Number(vol)));
-    if (Array.isArray(patterns) || typeof patterns === 'string') {
-      trackList.push({ notes: parseBgmNotes(patterns), wave: wave || 'triangle', vol: baseVol });
-    } else if (patterns && typeof patterns === 'object') {
-      if (patterns.lead) trackList.push({ notes: parseBgmNotes(patterns.lead), wave: wave || 'square', vol: baseVol });
-      if (patterns.bass) trackList.push({ notes: parseBgmNotes(patterns.bass), wave: 'sawtooth', vol: baseVol * 0.85 });
-      if (patterns.arp) trackList.push({ notes: parseBgmNotes(patterns.arp), wave: 'triangle', vol: baseVol * 0.65 });
-      if (patterns.drums) drumList = parseBgmNotes(patterns.drums);
+    if (Array.isArray(activePatterns) || typeof activePatterns === 'string') {
+      trackList.push({ notes: parseBgmNotes(activePatterns), wave: wave || 'triangle', vol: baseVol });
+    } else if (activePatterns && typeof activePatterns === 'object') {
+      if (activePatterns.lead) trackList.push({ notes: parseBgmNotes(activePatterns.lead), wave: wave || 'square', vol: baseVol });
+      if (activePatterns.chords) trackList.push({ notes: parseBgmNotes(activePatterns.chords), wave: 'triangle', vol: baseVol * 0.72 });
+      if (activePatterns.bass) trackList.push({ notes: parseBgmNotes(activePatterns.bass), wave: 'sawtooth', vol: baseVol * 0.85 });
+      if (activePatterns.arp) trackList.push({ notes: parseBgmNotes(activePatterns.arp), wave: 'triangle', vol: baseVol * 0.65 });
+      if (activePatterns.drums) drumList = parseBgmNotes(activePatterns.drums);
     }
     if (!trackList.length && !drumList.length) return;
-    var tempo = Math.max(40, Math.min(300, Number(bpm) || 120));
+    var tempo = Math.max(40, Math.min(300, Number(bpm || (activePatterns && activePatterns.bpm)) || 120));
     bgmState.stepSec = 60 / tempo / 2;
     bgmState.tracks = trackList;
     bgmState.drums = drumList;
@@ -2255,6 +2736,13 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     var dest = ensureAudioMaster();
     if (audioCtx && dest) {
       var busIn = audioCtx.createGain();
+      var masterFade = audioCtx.createGain();
+      if (fadeInSec && fadeInSec > 0) {
+        masterFade.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+        masterFade.gain.linearRampToValueAtTime(1, audioCtx.currentTime + fadeInSec);
+      } else {
+        masterFade.gain.setValueAtTime(1, audioCtx.currentTime);
+      }
       var chainTail = busIn;
       if (cfg.lowpass || cfg.cutoff) {
         var lp = audioCtx.createBiquadFilter();
@@ -2263,7 +2751,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         chainTail.connect(lp);
         chainTail = lp;
       }
-      chainTail.connect(dest);
+      chainTail.connect(masterFade);
+      masterFade.connect(dest);
       var echoAmt = Number(cfg.delay !== undefined ? cfg.delay : cfg.echo) || 0;
       if (echoAmt > 0 && audioCtx.createDelay) {
         var dly = audioCtx.createDelay(1.0);
@@ -2274,9 +2763,10 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         wet.gain.setValueAtTime(Math.min(0.6, echoAmt * 0.5), audioCtx.currentTime);
         chainTail.connect(dly);
         dly.connect(fb); fb.connect(dly);
-        dly.connect(wet); wet.connect(dest);
+        dly.connect(wet); wet.connect(masterFade);
       }
       bgmState.bus = busIn;
+      bgmState.masterGain = masterFade;
     }
     bgmState.nextTime = audioCtx ? audioCtx.currentTime + 0.05 : 0;
     bgmState.timer = setInterval(function() {
@@ -2300,6 +2790,44 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         bgmState.step++;
       }
     }, 35);
+  }
+
+  function syncBgm(patternsOrSection, opts) {
+    var o = (opts && typeof opts === 'object') ? opts : {};
+    var rawF = o.fade !== undefined ? Number(o.fade) : 0.6;
+    var fadeSec = Math.max(0.05, rawF > 10 ? rawF / 1000 : rawF);
+    var nextPat = patternsOrSection;
+    if (typeof patternsOrSection === 'string' && bgmState.sections && bgmState.sections[patternsOrSection]) {
+      nextPat = bgmState.sections[patternsOrSection];
+    }
+    var prevTimer = bgmState.timer;
+    var prevMaster = bgmState.masterGain;
+    var prevBus = bgmState.bus;
+    var prevStep = bgmState.step;
+    bgmState.timer = null;
+    bgmState.masterGain = null;
+    bgmState.bus = null;
+    if (prevTimer) clearInterval(prevTimer);
+    if (prevMaster && audioCtx) {
+      try {
+        prevMaster.gain.cancelScheduledValues(audioCtx.currentTime);
+        prevMaster.gain.setValueAtTime(prevMaster.gain.value || 1, audioCtx.currentTime);
+        prevMaster.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + fadeSec);
+        setTimeout(function() {
+          try { prevMaster.disconnect(); if (prevBus) prevBus.disconnect(); } catch(e) {}
+        }, Math.round(fadeSec * 1000) + 80);
+      } catch(e) {}
+    }
+    var lc = bgmState.lastCfg || {};
+    bgm(
+      nextPat,
+      o.bpm !== undefined ? o.bpm : (nextPat && nextPat.bpm ? nextPat.bpm : lc.bpm),
+      o.wave !== undefined ? o.wave : lc.wave,
+      o.vol !== undefined ? o.vol : lc.vol,
+      o.opts || opts || lc.opts,
+      fadeSec
+    );
+    if (o.keepPhase) bgmState.step = prevStep;
   }
 
   function loadImageAsset(path, onDone) {
@@ -2518,6 +3046,28 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     };
   }
 
+  function tileMask(gridSrc, gx, gy, wallSpec, oobSolid) {
+    var rows = gridSrc && gridSrc._rows ? gridSrc._rows : gridSrc;
+    if (!Array.isArray(rows) || !rows.length) return 0;
+    var gh = rows.length;
+    function isMatch(cx, cy) {
+      if (cy < 0 || cy >= gh) return !!oobSolid;
+      var row = rows[cy];
+      var gw = Array.isArray(row) ? row.length : String(row || '').length;
+      if (cx < 0 || cx >= gw) return !!oobSolid;
+      var v = Array.isArray(row) ? row[cx] : String(row)[cx];
+      if (typeof wallSpec === 'function') return !!wallSpec(v, cx, cy);
+      if (wallSpec === undefined) {
+        if (gridSrc && gridSrc._isTilemap && typeof gridSrc._isSolidChar === 'function') return gridSrc._isSolidChar(v);
+        return v === '#' || v === 1 || v === true;
+      }
+      if (typeof wallSpec === 'string') return wallSpec.indexOf(String(v)) >= 0;
+      return v === wallSpec;
+    }
+    var ix = Math.floor(gx), iy = Math.floor(gy);
+    return (isMatch(ix, iy - 1) ? 1 : 0) | (isMatch(ix + 1, iy) ? 2 : 0) | (isMatch(ix, iy + 1) ? 4 : 0) | (isMatch(ix - 1, iy) ? 8 : 0);
+  }
+
   function collides(a, b) {
     if (!a || !b) return false;
     if (b._isTilemap) {
@@ -2616,6 +3166,99 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return { hit: false, x: x2, y: y2, dist: totalDist, target: null };
   }
 
+  function lineOfSight(x1, y1, x2, y2, obstacles, wallSpec) {
+    var list = !obstacles ? [] : (Array.isArray(obstacles) ? obstacles : [obstacles]);
+    if (wallSpec === undefined) return !raycast(x1, y1, x2, y2, list).hit;
+    var dx = x2 - x1, dy = y2 - y1;
+    var totalDist = Math.hypot(dx, dy);
+    if (totalDist < 0.0001) return true;
+    var steps = Math.max(2, Math.ceil(totalDist / 4));
+    var sx = dx / steps, sy = dy / steps;
+    for (var s = 1; s < steps; s++) {
+      var px = x1 + sx * s, py = y1 + sy * s;
+      for (var i = 0; i < list.length; i++) {
+        var ob = list[i];
+        if (!ob || ob.alive === false) continue;
+        if (ob._isTilemap) {
+          var ch = ob.get(Math.floor(px / ob.tileSize), Math.floor(py / ob.tileSize));
+          var hitCh = typeof wallSpec === 'function' ? !!wallSpec(ch) : (typeof wallSpec === 'string' ? wallSpec.indexOf(String(ch)) >= 0 : ch === wallSpec);
+          if (hitCh) return false;
+        } else {
+          var bx = ob._shape === 'circle' ? ob.x - ob.r : ob.x;
+          var by = ob._shape === 'circle' ? ob.y - ob.r : ob.y;
+          var bw = ob._shape === 'circle' ? ob.r * 2 : (ob.w || 0);
+          var bh = ob._shape === 'circle' ? ob.r * 2 : (ob.h || 0);
+          if (px >= bx && px <= bx + bw && py >= by && py <= by + bh) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  function moveCircle(ent, dx, dy, obstacles, radiusOverride) {
+    if (!ent) return { hit: false, nx: 0, ny: 0 };
+    var rad = Number(radiusOverride || ent.r || (ent.w ? ent.w * 0.5 : 16)) || 16;
+    var list = !obstacles ? [] : (Array.isArray(obstacles) ? obstacles : [obstacles]);
+    ent.x += Number(dx) || 0;
+    ent.y += Number(dy) || 0;
+    var hit = false, lnx = 0, lny = 0;
+    function pushBox(bx, by, bw, bh) {
+      var cx = Math.max(bx, Math.min(bx + bw, ent.x));
+      var cy = Math.max(by, Math.min(by + bh, ent.y));
+      var ddx = ent.x - cx, ddy = ent.y - cy;
+      var d2 = ddx * ddx + ddy * ddy;
+      if (d2 >= rad * rad) return;
+      hit = true;
+      var nx = 0, ny = 0, pen = 0;
+      if (d2 > 0.00001) {
+        var d = Math.sqrt(d2);
+        nx = ddx / d; ny = ddy / d; pen = rad - d;
+      } else {
+        var dl = Math.abs(ent.x - bx), dr = Math.abs(bx + bw - ent.x);
+        var dt = Math.abs(ent.y - by), db = Math.abs(by + bh - ent.y);
+        var m = Math.min(dl, dr, dt, db);
+        if (m === dl) { nx = -1; pen = rad + dl; }
+        else if (m === dr) { nx = 1; pen = rad + dr; }
+        else if (m === dt) { ny = -1; pen = rad + dt; }
+        else { ny = 1; pen = rad + db; }
+      }
+      ent.x += nx * pen;
+      ent.y += ny * pen;
+      lnx = nx; lny = ny;
+    }
+    for (var i = 0; i < list.length; i++) {
+      var ob = list[i];
+      if (!ob || ob === ent || ob.alive === false) continue;
+      if (ob._isTilemap) {
+        var ts = ob.tileSize;
+        var x0 = Math.floor((ent.x - rad) / ts), y0 = Math.floor((ent.y - rad) / ts);
+        var x1 = Math.floor((ent.x + rad) / ts), y1 = Math.floor((ent.y + rad) / ts);
+        for (var gy = y0; gy <= y1; gy++) {
+          if (gy < 0 || gy >= ob.rows) continue;
+          for (var gx = x0; gx <= x1; gx++) {
+            if (gx < 0 || gx >= ob.cols) continue;
+            if (ob._isSolidChar(ob.get(gx, gy))) pushBox(gx * ts, gy * ts, ts, ts);
+          }
+        }
+      } else if (ob._shape === 'circle') {
+        var r2 = Number(ob.r) || 16;
+        var cdx = ent.x - ob.x, cdy = ent.y - ob.y;
+        var d2 = cdx * cdx + cdy * cdy, minR = rad + r2;
+        if (d2 < minR * minR) {
+          hit = true;
+          var d = Math.sqrt(d2) || 0.001;
+          var nx = cdx / d, ny = cdy / d;
+          ent.x += nx * (minR - d);
+          ent.y += ny * (minR - d);
+          lnx = nx; lny = ny;
+        }
+      } else {
+        pushBox(Number(ob.x) || 0, Number(ob.y) || 0, Number(ob.w) || 0, Number(ob.h) || 0);
+      }
+    }
+    return { hit: hit, nx: lnx, ny: lny };
+  }
+
   function isOptsObj(v) {
     return v !== null && typeof v === 'object' && !Array.isArray(v);
   }
@@ -2709,6 +3352,33 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
     var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
     if (mx >= x && mx <= x + w && my >= y && my <= y + h) mouse.overUi = true;
+  }
+
+  function panel9(imgOrSprite, x, y, w, h, borderPx) {
+    var src = imgOrSprite && (imgOrSprite.img || imgOrSprite.canvas || imgOrSprite);
+    var ready = imgOrSprite && imgOrSprite.img ? !!imgOrSprite.ready : (src && (src.naturalWidth || src.width) > 0);
+    var dw = Math.max(2, Number(w) || 64), dh = Math.max(2, Number(h) || 64);
+    var b = Math.max(1, Number(borderPx) || 8);
+    if (!ready) { panel(x, y, dw, dh); return; }
+    var sw = imgOrSprite.width || src.naturalWidth || src.width;
+    var sh = imgOrSprite.height || src.naturalHeight || src.height;
+    var bx = Math.min(b, Math.floor(sw * 0.45), Math.floor(dw * 0.45));
+    var by = Math.min(b, Math.floor(sh * 0.45), Math.floor(dh * 0.45));
+    var mcw = Math.max(0, sw - bx * 2), mch = Math.max(0, sh - by * 2);
+    var dmw = Math.max(0, dw - bx * 2), dmh = Math.max(0, dh - by * 2);
+    ctx.drawImage(src, 0, 0, bx, by, x, y, bx, by);
+    if (dmw > 0 && mcw > 0) ctx.drawImage(src, bx, 0, mcw, by, x + bx, y, dmw, by);
+    ctx.drawImage(src, sw - bx, 0, bx, by, x + dw - bx, y, bx, by);
+    if (dmh > 0 && mch > 0) {
+      ctx.drawImage(src, 0, by, bx, mch, x, y + by, bx, dmh);
+      if (dmw > 0 && mcw > 0) ctx.drawImage(src, bx, by, mcw, mch, x + bx, y + by, dmw, dmh);
+      ctx.drawImage(src, sw - bx, by, bx, mch, x + dw - bx, y + by, bx, dmh);
+    }
+    ctx.drawImage(src, 0, sh - by, bx, by, x, y + dh - by, bx, by);
+    if (dmw > 0 && mcw > 0) ctx.drawImage(src, bx, sh - by, mcw, by, x + bx, y + dh - by, dmw, by);
+    ctx.drawImage(src, sw - bx, sh - by, bx, by, x + dw - bx, y + dh - by, bx, by);
+    var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
+    if (mx >= x && mx <= x + dw && my >= y && my <= y + dh) mouse.overUi = true;
   }
 
   function scrollBegin(id, x, y, w, h, contentH) {
@@ -3036,6 +3706,36 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return cam.zoom;
   }
 
+  function getCamera() {
+    return { x: cam.x, y: cam.y, zoom: cam.zoom || 1 };
+  }
+  function camX() { return cam.x; }
+  function camY() { return cam.y; }
+  function camZoom() { return cam.zoom || 1; }
+  function inView(xOrEnt, yOrPad, padOrW, hOpt) {
+    var z = cam.zoom || 1;
+    var hw = (W / 2) / z, hh = (H / 2) / z;
+    var cx = cam.x + W / 2, cy = cam.y + H / 2;
+    var vMinX = cx - hw, vMaxX = cx + hw, vMinY = cy - hh, vMaxY = cy + hh;
+    if (xOrEnt && typeof xOrEnt === 'object') {
+      var pad = Number(yOrPad) || 48;
+      var ex = Number(xOrEnt.x) || 0, ey = Number(xOrEnt.y) || 0;
+      if (xOrEnt._shape === 'circle' || (xOrEnt.r !== undefined && !xOrEnt.w)) {
+        var r = (Number(xOrEnt.r) || 16) + pad;
+        return ex + r >= vMinX && ex - r <= vMaxX && ey + r >= vMinY && ey - r <= vMaxY;
+      }
+      var ew = Number(xOrEnt.w) || 0, eh = Number(xOrEnt.h) || 0;
+      return ex + ew + pad >= vMinX && ex - pad <= vMaxX && ey + eh + pad >= vMinY && ey - pad <= vMaxY;
+    }
+    var px = Number(xOrEnt) || 0, py = Number(yOrPad) || 0;
+    if (hOpt !== undefined) {
+      var rw = Number(padOrW) || 0, rh = Number(hOpt) || 0;
+      return px + rw >= vMinX && px <= vMaxX && py + rh >= vMinY && py <= vMaxY;
+    }
+    var padN = padOrW === undefined ? 48 : Number(padOrW) || 0;
+    return px >= vMinX - padN && px <= vMaxX + padN && py >= vMinY - padN && py <= vMaxY + padN;
+  }
+
   function showToast(msg, col, durMs) {
     var d = Math.max(0.4, (Number(durMs) || 2400) / 1000);
     toastQueue.push({ text: String(msg || ''), color: col || '#38bdf8', rem: d, dur: d });
@@ -3260,6 +3960,10 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     this.vx = 0; this.vy = 0; this.rot = 0; this.scale = 1; this.alpha = 1;
     this.color = '#38bdf8';
     this.alive = true;
+    this.state = '';
+    this.stateTime = 0;
+    this._states = null;
+    this._scene = null;
   }
   BaseEntity.prototype.move = function(dx, dy) { this.x += dx || 0; this.y += dy || 0; };
   BaseEntity.prototype.destroy = function() { this.alive = false; };
@@ -3269,13 +3973,38 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     if (this._shape === 'circle') { var dx = px - this.x, dy = py - this.y; return dx * dx + dy * dy <= (this.r || 16) * (this.r || 16); }
     return px >= this.x && px <= this.x + (this.w || 32) && py >= this.y && py <= this.y + (this.h || 32);
   };
+  BaseEntity.prototype.setState = function(nextName) {
+    var args = [this, nextName];
+    for (var i = 1; i < arguments.length; i++) args.push(arguments[i]);
+    return setStateGlobal.apply(null, args);
+  };
   BaseEntity.prototype.draw = function() {
+    if (this._states && this.state && this._states[this.state] && typeof this._states[this.state].draw === 'function') {
+      this._states[this.state].draw();
+      return;
+    }
     ctx.save();
     if (this.alpha !== undefined && this.alpha !== 1) ctx.globalAlpha *= Math.max(0, Math.min(1, this.alpha));
     if (this._shape === 'circle') drawCircle(this.x, this.y, this.r || 16, this.color || '#fbbf24');
     else drawRect(this.x, this.y, this.w || 32, this.h || 32, this.color || '#38bdf8');
     ctx.restore();
   };
+
+  function setStateGlobal(ent, nextName) {
+    if (!ent || typeof ent !== 'object') return ent;
+    var nxt = String(nextName || '');
+    var args = Array.prototype.slice.call(arguments, 2);
+    var old = ent.state || '';
+    if (old && ent._states && ent._states[old] && typeof ent._states[old].exit === 'function') {
+      try { Promise.resolve(ent._states[old].exit()).catch(handleHookError); } catch(e) { handleHookError(e); }
+    }
+    ent.state = nxt;
+    ent.stateTime = 0;
+    if (nxt && ent._states && ent._states[nxt] && typeof ent._states[nxt].enter === 'function') {
+      try { Promise.resolve(ent._states[nxt].enter.apply(null, args)).catch(handleHookError); } catch(e) { handleHookError(e); }
+    }
+    return ent;
+  }
 
   function makeRectEntity(x, y, w, h, color) {
     var obj = {
@@ -3498,6 +4227,56 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return out;
   }
 
+  function limitSteering(fx, fy, maxF) {
+    var l = Math.hypot(fx, fy);
+    if (maxF > 0 && l > maxF) { var s = maxF / l; return { x: fx * s, y: fy * s }; }
+    return { x: fx, y: fy };
+  }
+  function steerSeek(ent, tx, ty, speed, maxForce) {
+    if (!ent) return { x: 0, y: 0 };
+    var spd = Number(speed) || 160;
+    var dx = (Number(tx) || 0) - ent.x, dy = (Number(ty) || 0) - ent.y;
+    var d = Math.hypot(dx, dy);
+    if (d < 0.001) return { x: -(ent.vx || 0), y: -(ent.vy || 0) };
+    var dvx = (dx / d) * spd - (ent.vx || 0);
+    var dvy = (dy / d) * spd - (ent.vy || 0);
+    return limitSteering(dvx, dvy, maxForce === undefined ? spd * 4 : Number(maxForce));
+  }
+  function steerArrive(ent, tx, ty, speed, slowRadius, maxForce) {
+    if (!ent) return { x: 0, y: 0 };
+    var spd = Number(speed) || 160, sr = Math.max(8, Number(slowRadius) || 90);
+    var dx = (Number(tx) || 0) - ent.x, dy = (Number(ty) || 0) - ent.y;
+    var d = Math.hypot(dx, dy);
+    if (d < 0.001) return { x: -(ent.vx || 0), y: -(ent.vy || 0) };
+    var desiredSpd = d < sr ? spd * (d / sr) : spd;
+    var dvx = (dx / d) * desiredSpd - (ent.vx || 0);
+    var dvy = (dy / d) * desiredSpd - (ent.vy || 0);
+    return limitSteering(dvx, dvy, maxForce === undefined ? spd * 4 : Number(maxForce));
+  }
+  function steerSeparate(entitiesList, ent, radius, force) {
+    if (!ent || !Array.isArray(entitiesList)) return { x: 0, y: 0 };
+    var rad = Math.max(4, Number(radius) || 40);
+    var f = Number(force) || 180;
+    var sx = 0, sy = 0, count = 0;
+    for (var i = 0; i < entitiesList.length; i++) {
+      var o = entitiesList[i];
+      if (!o || o === ent || o.alive === false) continue;
+      var dx = ent.x - o.x, dy = ent.y - o.y;
+      var d = Math.hypot(dx, dy);
+      if (d > 0.001 && d < rad) {
+        var w = (rad - d) / rad;
+        sx += (dx / d) * w;
+        sy += (dy / d) * w;
+        count++;
+      }
+    }
+    if (count > 0) {
+      var l = Math.hypot(sx, sy) || 1;
+      return { x: (sx / l) * f, y: (sy / l) * f };
+    }
+    return { x: 0, y: 0 };
+  }
+
   // --- Pre-allocated Float32Array 5,000 Particle Pool ---
   var MAX_PARTICLES = 5000;
   var pCount = 0;
@@ -3547,7 +4326,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
   }
 
-  // --- 2D Lighting & Raycast Shadows (Half-Res Lightmap) ---
+  // --- 2D Lighting, Directional Cone Lights & Raycast Shadows (Half-Res Lightmap) ---
   var lightCanvas = document.createElement('canvas');
   var lightCtx = lightCanvas.getContext('2d');
   var lightState = { hasAmbient: false, ambientCol: '#020617', darkness: 0.72, lights: [], casters: [] };
@@ -3563,11 +4342,43 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       lightState.darkness = darkness === undefined ? 0.75 : Math.max(0, Math.min(1, Number(darkness)));
     }
   }
+  function pushLightEntry(kind, x, y, radius, color, optsOrIntensity) {
+    var o = isOptsObj(color) ? color : (isOptsObj(optsOrIntensity) ? optsOrIntensity : null);
+    var col = o ? (o.color || '#ffffff') : (color || '#ffffff');
+    var inten = o ? (o.intensity !== undefined ? Number(o.intensity) : 1) : (optsOrIntensity === undefined ? 1 : Number(optsOrIntensity));
+    lightState.lights.push({
+      kind: kind,
+      x: Number(x) || 0, y: Number(y) || 0,
+      r: Math.max(8, Number(radius) || 140),
+      color: col,
+      intensity: inten,
+      flicker: o ? Math.max(0, Math.min(0.8, Number(o.flicker) || 0)) : 0,
+      angle: o && o.angle !== undefined ? Number(o.angle) : undefined,
+      spread: o && o.spread !== undefined ? Number(o.spread) : undefined,
+      castShadow: kind === 'shadow' || (o && o.shadow !== false)
+    });
+  }
   function light(x, y, radius, color, intensity) {
-    lightState.lights.push({ kind: 'radial', x: Number(x) || 0, y: Number(y) || 0, r: Math.max(8, Number(radius) || 140), color: color || '#ffffff', intensity: intensity === undefined ? 1 : Number(intensity) });
+    pushLightEntry('radial', x, y, radius, color, intensity);
   }
   function shadowLight(x, y, radius, color, intensity) {
-    lightState.lights.push({ kind: 'shadow', x: Number(x) || 0, y: Number(y) || 0, r: Math.max(8, Number(radius) || 220), color: color || '#fde68a', intensity: intensity === undefined ? 1 : Number(intensity) });
+    pushLightEntry('shadow', x, y, radius, color || '#fde68a', intensity);
+  }
+  function coneLight(x, y, radius, angle, spread, color, optsOrIntensity) {
+    var o = isOptsObj(color) ? color : (isOptsObj(optsOrIntensity) ? optsOrIntensity : {});
+    var col = isOptsObj(color) ? (o.color || '#fde68a') : (color || '#fde68a');
+    var inten = isOptsObj(optsOrIntensity) ? (o.intensity !== undefined ? Number(o.intensity) : 1) : (optsOrIntensity === undefined ? 1 : Number(optsOrIntensity));
+    lightState.lights.push({
+      kind: (o.shadow === false ? 'radial' : 'shadow'),
+      x: Number(x) || 0, y: Number(y) || 0,
+      r: Math.max(8, Number(radius) || 260),
+      color: col,
+      intensity: inten,
+      flicker: Math.max(0, Math.min(0.8, Number(o.flicker) || 0)),
+      angle: Number(angle) || 0,
+      spread: Math.max(0.05, Math.min(Math.PI * 2, spread === undefined ? Math.PI * 0.35 : Number(spread))),
+      castShadow: o.shadow !== false
+    });
   }
   function shadowCasters(obstacles) {
     var segs = [];
@@ -3634,14 +4445,16 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     for (var li = 0; li < lightState.lights.length; li++) {
       var L = lightState.lights[li];
       var lc = parseColorRgba(L.color);
-      var inten = Math.max(0, Math.min(2, L.intensity));
+      var flk = L.flicker > 0 ? (1 + (Math.sin(gameTime * 13.7 + L.x * 0.11 + L.y * 0.07) * 0.6 + Math.cos(gameTime * 27.3 + L.y * 0.17) * 0.4) * L.flicker) : 1;
+      var radEff = L.r * (L.flicker > 0 ? (1 + (flk - 1) * 0.3) : 1);
+      var inten = Math.max(0, Math.min(2, L.intensity * flk));
       var rC = Math.min(255, Math.round(lc[0] * inten));
       var gC = Math.min(255, Math.round(lc[1] * inten));
       var bC = Math.min(255, Math.round(lc[2] * inten));
       lightCtx.save();
       if (L.kind === 'shadow' && lightState.casters.length > 0) {
         var near = [], angles = [];
-        var rPad = L.r * 1.45;
+        var rPad = radEff * 1.45;
         for (var si = 0; si < lightState.casters.length; si++) {
           var sg = lightState.casters[si];
           if ((sg[0] < L.x - rPad && sg[2] < L.x - rPad) || (sg[0] > L.x + rPad && sg[2] > L.x + rPad) ||
@@ -3657,7 +4470,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         for (var ai = 0; ai < angles.length; ai++) {
           var ang = angles[ai];
           var rdx = Math.cos(ang), rdy = Math.sin(ang);
-          var bestT = L.r;
+          var bestT = radEff;
           for (var nj = 0; nj < near.length; nj++) {
             var s = near[nj];
             var sdx = s[2] - s[0], sdy = s[3] - s[1];
@@ -3675,13 +4488,20 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         lightCtx.closePath();
         lightCtx.clip();
       }
-      var grad = lightCtx.createRadialGradient(L.x, L.y, 0, L.x, L.y, L.r);
+      if (L.angle !== undefined && L.spread !== undefined && L.spread < Math.PI * 1.99) {
+        lightCtx.beginPath();
+        lightCtx.moveTo(L.x, L.y);
+        lightCtx.arc(L.x, L.y, radEff, L.angle - L.spread * 0.5, L.angle + L.spread * 0.5);
+        lightCtx.closePath();
+        lightCtx.clip();
+      }
+      var grad = lightCtx.createRadialGradient(L.x, L.y, 0, L.x, L.y, radEff);
       grad.addColorStop(0, 'rgba(' + rC + ',' + gC + ',' + bC + ',' + Math.min(1, inten) + ')');
       grad.addColorStop(0.55, 'rgba(' + rC + ',' + gC + ',' + bC + ',' + (Math.min(1, inten) * 0.35) + ')');
       grad.addColorStop(1, 'rgba(0,0,0,0)');
       lightCtx.fillStyle = grad;
       lightCtx.beginPath();
-      lightCtx.arc(L.x, L.y, L.r, 0, Math.PI * 2);
+      lightCtx.arc(L.x, L.y, radEff, 0, Math.PI * 2);
       lightCtx.fill();
       lightCtx.restore();
     }
@@ -3702,9 +4522,103 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     lightState.lights.length = 0;
   }
 
-  // --- Hybrid WebGL2 Post-FX Pipeline (+ 1/4-res 2-Pass Bloom & Custom Shaders) ---
+  // --- Built-in Camera-Wrapped Weather System (Zero Allocation Float32Array Pool) ---
+  var MAX_WEATHER = 800;
+  var wPoolX = new Float32Array(MAX_WEATHER), wPoolY = new Float32Array(MAX_WEATHER);
+  var wPoolSpd = new Float32Array(MAX_WEATHER), wPoolPh = new Float32Array(MAX_WEATHER);
+  var weatherState = { type: '', intensity: 0, wind: 0, count: 0 };
+
+  function weather(type, intensity, wind) {
+    var t = !type || type === 'none' || type === 'off' ? '' : String(type).toLowerCase();
+    var inten = intensity === undefined ? 0.65 : Math.max(0, Math.min(1.5, Number(intensity) || 0));
+    var wnd = wind === undefined ? (t === 'rain' ? -80 : (t === 'snow' ? 28 : 18)) : Number(wind) || 0;
+    var needInit = t && t !== weatherState.type;
+    weatherState.type = t;
+    weatherState.intensity = inten;
+    weatherState.wind = wnd;
+    if (!t || inten <= 0.01) { weatherState.count = 0; return; }
+    var targetCnt = t === 'rain' ? Math.min(MAX_WEATHER, Math.round(380 * inten)) : Math.min(MAX_WEATHER, Math.round(160 * inten));
+    if (needInit) {
+      var z = cam.zoom || 1;
+      var spanW = (W / z) * 1.35, spanH = (H / z) * 1.35;
+      var x0 = cam.x + W * 0.5 - spanW * 0.5, y0 = cam.y + H * 0.5 - spanH * 0.5;
+      for (var i = 0; i < MAX_WEATHER; i++) {
+        wPoolX[i] = x0 + Math.random() * spanW;
+        wPoolY[i] = y0 + Math.random() * spanH;
+        wPoolSpd[i] = 0.75 + Math.random() * 0.55;
+        wPoolPh[i] = Math.random() * Math.PI * 2;
+      }
+    }
+    weatherState.count = targetCnt;
+  }
+
+  function updateAndDrawWeather(dt) {
+    var n = weatherState.count, t = weatherState.type;
+    if (n <= 0 || !t) return;
+    var z = cam.zoom || 1;
+    var padW = (W / z) * 1.3, padH = (H / z) * 1.3;
+    var minX = cam.x + W * 0.5 - padW * 0.5, maxX = minX + padW;
+    var minY = cam.y + H * 0.5 - padH * 0.5, maxY = minY + padH;
+    var vyBase = t === 'rain' ? 680 : (t === 'snow' ? 68 : (t === 'embers' ? -72 : -18));
+    var vxBase = weatherState.wind;
+    ctx.save();
+    for (var i = 0; i < n; i++) {
+      var mul = wPoolSpd[i];
+      var vx = vxBase * mul;
+      if (t === 'snow' || t === 'spores' || t === 'embers') {
+        vx += Math.sin(gameTime * 2.2 + wPoolPh[i]) * (t === 'spores' ? 22 : 16);
+      }
+      var vy = vyBase * mul;
+      wPoolX[i] += vx * dt;
+      wPoolY[i] += vy * dt;
+      if (wPoolX[i] < minX) wPoolX[i] += padW;
+      else if (wPoolX[i] > maxX) wPoolX[i] -= padW;
+      if (wPoolY[i] < minY) wPoolY[i] += padH;
+      else if (wPoolY[i] > maxY) wPoolY[i] -= padH;
+      var px = wPoolX[i], py = wPoolY[i];
+      if (t === 'rain') {
+        ctx.strokeStyle = 'rgba(147,197,253,0.42)';
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + vx * 0.028, py + vy * 0.028);
+        ctx.stroke();
+      } else if (t === 'snow') {
+        var sr = 1.6 + (mul - 0.7) * 2.2;
+        ctx.fillStyle = 'rgba(241,245,249,0.72)';
+        ctx.beginPath();
+        ctx.arc(px, py, sr, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (t === 'embers') {
+        var ea = 0.5 + 0.35 * Math.sin(gameTime * 7 + wPoolPh[i]);
+        ctx.fillStyle = 'rgba(251,146,60,' + ea.toFixed(2) + ')';
+        ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+      } else {
+        var sa = 0.35 + 0.3 * Math.sin(gameTime * 3 + wPoolPh[i]);
+        ctx.fillStyle = 'rgba(167,243,208,' + sa.toFixed(2) + ')';
+        ctx.beginPath();
+        ctx.arc(px, py, 2.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // --- Hybrid WebGL2 Post-FX Pipeline (+ Shockwaves, 1/4-res 2-Pass Bloom & Custom Shaders) ---
   var fxState = { enabled: false, bloom: 0, vignette: 0, chromatic: 0, wave: 0, blur: 0, contrast: 1, saturation: 1, crt: 0, customGlsl: '', customUniforms: {} };
   var glCanvas = null, gl = null, glLost = false, glRes = null;
+
+  function shockwave(wx, wy, power, radius, dur) {
+    var o = isOptsObj(wx) ? wx : {};
+    var sx = isOptsObj(wx) ? (Number(o.x) || 0) : (Number(wx) || 0);
+    var sy = isOptsObj(wx) ? (Number(o.y) || 0) : (Number(wy) || 0);
+    var pwr = Number(isOptsObj(wx) ? (o.power !== undefined ? o.power : 0.04) : (power !== undefined ? power : 0.04));
+    var rad = Math.max(24, Number(isOptsObj(wx) ? (o.radius || 240) : (radius || 240)));
+    var rawD = Number(isOptsObj(wx) ? (o.dur || o.duration || 0.55) : (dur || 0.55));
+    var dSec = Math.max(0.08, rawD > 10 ? rawD / 1000 : rawD);
+    if (shockwaves.length >= 4) shockwaves.shift();
+    shockwaves.push({ wx: sx, wy: sy, power: pwr, radius: rad, t: 0, dur: dSec });
+  }
 
   function fx(opts) {
     if (opts === false || opts === null) { fxState.enabled = false; return; }
@@ -3766,10 +4680,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     if (!glCanvas) {
       glCanvas = document.createElement('canvas');
       gl = glCanvas.getContext('webgl2', { alpha: true, premultipliedAlpha: false, antialias: false });
-      if (!gl) return false;
+      if (!gl) { glLost = true; return false; }
       glCanvas.addEventListener('webglcontextlost', function(e) { e.preventDefault(); glLost = true; glRes = null; });
       glCanvas.addEventListener('webglcontextrestored', function() { glLost = false; glRes = null; });
     }
+    if (!gl) { glLost = true; return false; }
     var cw = worldCanvas.width || 1, ch = worldCanvas.height || 1;
     if (glCanvas.width !== cw || glCanvas.height !== ch) { glCanvas.width = cw; glCanvas.height = ch; }
     if (!glRes) {
@@ -3777,7 +4692,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         var vsQuad = '#version 300 es\\nconst vec2 P[4]=vec2[](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(1,1));out vec2 v_uv;void main(){vec2 p=P[gl_VertexID];v_uv=p*0.5+0.5;gl_Position=vec4(p,0.0,1.0);}';
         var fsExtract = '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex;in vec2 v_uv;out vec4 o;void main(){vec4 c=texture(u_tex,v_uv);float br=max(c.r,max(c.g,c.b));float k=smoothstep(0.55,0.95,br);o=vec4(c.rgb*k,1.0);}';
         var fsBlur = '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex;uniform vec2 u_dir;in vec2 v_uv;out vec4 o;void main(){vec3 s=texture(u_tex,v_uv).rgb*0.227;s+=texture(u_tex,v_uv+u_dir*1.38).rgb*0.194;s+=texture(u_tex,v_uv-u_dir*1.38).rgb*0.194;s+=texture(u_tex,v_uv+u_dir*3.23).rgb*0.070;s+=texture(u_tex,v_uv-u_dir*3.23).rgb*0.070;o=vec4(s,1.0);}';
-        var fsMain = '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex,u_bloomTex;uniform vec2 u_resolution;uniform float u_time,u_bloom,u_vignette,u_chromatic,u_wave,u_blur,u_contrast,u_saturation,u_crt;in vec2 v_uv;out vec4 o;void main(){vec2 uv=v_uv;if(u_wave>0.0){uv.x+=sin(uv.y*28.0+u_time*4.5)*(u_wave*0.0012);uv.y+=cos(uv.x*22.0+u_time*3.8)*(u_wave*0.0008);}vec2 px=1.0/max(u_resolution,vec2(1.0));vec4 base=texture(u_tex,uv);if(u_chromatic>0.0){float sh=u_chromatic*px.x*2.0;base.r=texture(u_tex,uv+vec2(sh,0.0)).r;base.b=texture(u_tex,uv-vec2(sh,0.0)).b;}if(u_blur>0.0){vec2 b=u_blur*px*1.4;base.rgb=(base.rgb+texture(u_tex,uv+vec2(b.x,0.0)).rgb+texture(u_tex,uv-vec2(b.x,0.0)).rgb+texture(u_tex,uv+vec2(0.0,b.y)).rgb+texture(u_tex,uv-vec2(0.0,b.y)).rgb)*0.2;}vec3 col=base.rgb;if(u_bloom>0.0){col+=texture(u_bloomTex,uv).rgb*u_bloom;}col=(col-0.5)*u_contrast+0.5;float lum=dot(col,vec3(0.299,0.587,0.114));col=mix(vec3(lum),col,u_saturation);if(u_crt>0.0){float sc=0.88+0.12*sin(uv.y*u_resolution.y*1.6);col*=mix(1.0,sc,u_crt);}if(u_vignette>0.0){float d=distance(uv,vec2(0.5));col*=mix(1.0,smoothstep(0.95,0.28,d),u_vignette);}o=vec4(clamp(col,0.0,1.0),base.a);}';
+        var fsMain = '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex,u_bloomTex;uniform vec2 u_resolution;uniform float u_time,u_bloom,u_vignette,u_chromatic,u_wave,u_blur,u_contrast,u_saturation,u_crt;uniform vec4 u_swPos[4];uniform float u_swAmp[4];in vec2 v_uv;out vec4 o;void main(){vec2 uv=v_uv;float asp=u_resolution.x/max(u_resolution.y,1.0);for(int i=0;i<4;i++){if(u_swAmp[i]>0.0001){vec2 df=uv-u_swPos[i].xy;vec2 da=vec2(df.x*asp,df.y);float dist=length(da);float rd=dist-u_swPos[i].z;float w=max(0.015,u_swPos[i].w);if(abs(rd)<w&&dist>0.0001){float f=1.0-abs(rd)/w;float disp=sin(rd*(3.14159/w))*u_swAmp[i]*(f*f);uv+=normalize(da)*disp*vec2(1.0/asp,1.0);}}}if(u_wave>0.0){uv.x+=sin(uv.y*28.0+u_time*4.5)*(u_wave*0.0012);uv.y+=cos(uv.x*22.0+u_time*3.8)*(u_wave*0.0008);}vec2 px=1.0/max(u_resolution,vec2(1.0));vec4 base=texture(u_tex,uv);if(u_chromatic>0.0){float sh=u_chromatic*px.x*2.0;base.r=texture(u_tex,uv+vec2(sh,0.0)).r;base.b=texture(u_tex,uv-vec2(sh,0.0)).b;}if(u_blur>0.0){vec2 b=u_blur*px*1.4;base.rgb=(base.rgb+texture(u_tex,uv+vec2(b.x,0.0)).rgb+texture(u_tex,uv-vec2(b.x,0.0)).rgb+texture(u_tex,uv+vec2(0.0,b.y)).rgb+texture(u_tex,uv-vec2(0.0,b.y)).rgb)*0.2;}vec3 col=base.rgb;if(u_bloom>0.0){col+=texture(u_bloomTex,uv).rgb*u_bloom;}col=(col-0.5)*u_contrast+0.5;float lum=dot(col,vec3(0.299,0.587,0.114));col=mix(vec3(lum),col,u_saturation);if(u_crt>0.0){float sc=0.88+0.12*sin(uv.y*u_resolution.y*1.6);col*=mix(1.0,sc,u_crt);}if(u_vignette>0.0){float d=distance(uv,vec2(0.5));col*=mix(1.0,smoothstep(0.95,0.28,d),u_vignette);}o=vec4(clamp(col,0.0,1.0),base.a);}';
         var makeTex = function() {
           var t = gl.createTexture();
           gl.bindTexture(gl.TEXTURE_2D, t);
@@ -3837,7 +4752,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function runWebGLPostFx() {
-    if (!fxState.enabled || !ensureWebGLPostFx()) return false;
+    if ((!fxState.enabled && shockwaves.length === 0) || !ensureWebGLPostFx()) return false;
     var cw = glCanvas.width, ch = glCanvas.height;
     gl.bindVertexArray(glRes.vao);
     gl.activeTexture(gl.TEXTURE0);
@@ -3845,7 +4760,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, worldCanvas);
 
-    if (fxState.bloom > 0) {
+    if (fxState.enabled && fxState.bloom > 0) {
       gl.viewport(0, 0, glRes.bw, glRes.bh);
       gl.bindFramebuffer(gl.FRAMEBUFFER, glRes.bFboA);
       gl.useProgram(glRes.pExtract);
@@ -3867,7 +4782,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, cw, ch);
-    var activeProg = (fxState.customGlsl && glRes.customProg) ? glRes.customProg : glRes.pMain;
+    var activeProg = (fxState.enabled && fxState.customGlsl && glRes.customProg) ? glRes.customProg : glRes.pMain;
     gl.useProgram(activeProg);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, glRes.srcTex);
@@ -3877,17 +4792,35 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     var locT = gl.getUniformLocation(activeProg, 'u_time');
     if (locT) gl.uniform1f(locT, gameTime);
     if (activeProg === glRes.pMain) {
+      var fxOn = fxState.enabled;
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, glRes.bTexA);
       gl.uniform1i(gl.getUniformLocation(activeProg, 'u_bloomTex'), 1);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_bloom'), fxState.bloom);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_vignette'), fxState.vignette);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_chromatic'), fxState.chromatic);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_wave'), fxState.wave);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_blur'), fxState.blur);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_contrast'), fxState.contrast);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_saturation'), fxState.saturation);
-      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_crt'), fxState.crt);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_bloom'), fxOn ? fxState.bloom : 0);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_vignette'), fxOn ? fxState.vignette : 0);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_chromatic'), fxOn ? fxState.chromatic : 0);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_wave'), fxOn ? fxState.wave : 0);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_blur'), fxOn ? fxState.blur : 0);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_contrast'), fxOn ? fxState.contrast : 1);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_saturation'), fxOn ? fxState.saturation : 1);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_crt'), fxOn ? fxState.crt : 0);
+      var swPosArr = new Float32Array(16), swAmpArr = new Float32Array(4);
+      var zc = cam.zoom || 1;
+      for (var si = 0; si < Math.min(4, shockwaves.length); si++) {
+        var sw = shockwaves[si];
+        var progSw = Math.max(0, Math.min(1, sw.t / (sw.dur || 0.55)));
+        var sx = (sw.wx - cam.x - W * 0.5) * zc + W * 0.5;
+        var sy = (sw.wy - cam.y - H * 0.5) * zc + H * 0.5;
+        swPosArr[si * 4] = sx / Math.max(1, W);
+        swPosArr[si * 4 + 1] = 1.0 - (sy / Math.max(1, H));
+        swPosArr[si * 4 + 2] = ((sw.radius * progSw) * zc) / Math.max(1, H);
+        swPosArr[si * 4 + 3] = Math.max(0.03, ((sw.radius * 0.24) * zc) / Math.max(1, H));
+        swAmpArr[si] = sw.power * (1.0 - progSw);
+      }
+      var lSwP = gl.getUniformLocation(activeProg, 'u_swPos');
+      if (lSwP) gl.uniform4fv(lSwP, swPosArr);
+      var lSwA = gl.getUniformLocation(activeProg, 'u_swAmp');
+      if (lSwA) gl.uniform1fv(lSwA, swAmpArr);
     } else if (fxState.customUniforms) {
       Object.keys(fxState.customUniforms).forEach(function(uk) {
         var loc = gl.getUniformLocation(activeProg, uk);
@@ -3930,16 +4863,132 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   var inSceneScope = false;
 
+  function resolveSceneOwner() {
+    return (inSceneScope || sceneStack.length > 0 || currentScene !== 'main' || registeredScenes.length <= 1) ? currentScene : null;
+  }
+
+  function _isTaskDead(taskObj) {
+    if (!taskObj) return false;
+    if (!taskObj.alive) return true;
+    if (taskObj.owner && taskObj.owner.alive === false) { taskObj.alive = false; return true; }
+    return false;
+  }
+
+  function _runTask(owner, asyncFn) {
+    var taskScene = resolveSceneOwner();
+    var taskObj = {
+      _royTask: true,
+      owner: owner || null,
+      scene: taskScene,
+      alive: true,
+      done: false,
+      cancel: function() { taskObj.alive = false; }
+    };
+    activeTasks.push(taskObj);
+    var p = Promise.resolve().then(function() {
+      if (_isTaskDead(taskObj)) return;
+      return asyncFn(taskObj);
+    }).catch(function(err) {
+      handleHookError(err);
+    }).then(function(resVal) {
+      taskObj.done = true;
+      var idx = activeTasks.indexOf(taskObj);
+      if (idx >= 0) activeTasks.splice(idx, 1);
+      return resVal;
+    });
+    taskObj.then = function(onF, onR) { return p.then(onF, onR); };
+    taskObj.catch = function(onR) { return p.catch(onR); };
+    return taskObj;
+  }
+
+  function _taskWait(taskObj, msOrCond) {
+    if (_isTaskDead(taskObj)) return Promise.resolve();
+    var waiterScene = taskObj ? taskObj.scene : resolveSceneOwner();
+    return new Promise(function(resolve) {
+      if (typeof msOrCond === 'function') {
+        taskWaiters.push({ task: taskObj, kind: 'cond', fn: msOrCond, resolve: resolve, scene: waiterScene });
+      } else if (msOrCond === undefined) {
+        taskWaiters.push({ task: taskObj, kind: 'frames', frames: 1, resolve: resolve, scene: waiterScene });
+      } else {
+        var ms = Number(msOrCond) || 0;
+        if (ms <= 0) {
+          taskWaiters.push({ task: taskObj, kind: 'frames', frames: 1, resolve: resolve, scene: waiterScene });
+        } else {
+          taskWaiters.push({ task: taskObj, kind: 'time', rem: ms / 1000, resolve: resolve, scene: waiterScene });
+        }
+      }
+    });
+  }
+
+  function spawnTask(fnOrHandle, owner) {
+    if (fnOrHandle && fnOrHandle._royTask) {
+      if (owner) fnOrHandle.owner = owner;
+      return fnOrHandle;
+    }
+    if (typeof fnOrHandle === 'function') {
+      return _runTask(owner || null, fnOrHandle);
+    }
+    return null;
+  }
+
+  function cancelTasks(owner) {
+    for (var i = activeTasks.length - 1; i >= 0; i--) {
+      var t = activeTasks[i];
+      if (!owner || t === owner || t.owner === owner) {
+        t.alive = false;
+        activeTasks.splice(i, 1);
+      }
+    }
+    for (var wi = taskWaiters.length - 1; wi >= 0; wi--) {
+      var w = taskWaiters[wi];
+      if (!owner || (w.task && (w.task === owner || w.task.owner === owner || !w.task.alive))) {
+        taskWaiters.splice(wi, 1);
+        try { w.resolve(); } catch(e) {}
+      }
+    }
+  }
+
+  function cleanupSceneArtifacts(scName) {
+    timers = timers.filter(function(t) { return t.scene !== scName; });
+    afterTimers = afterTimers.filter(function(t) { return t.scene !== scName; });
+    tweens = tweens.filter(function(tw) {
+      if (tw.scene === scName) { try { tw.resolve(tw.obj); } catch(e) {} return false; }
+      return true;
+    });
+    for (var i = activeTasks.length - 1; i >= 0; i--) {
+      if (activeTasks[i].scene === scName) {
+        activeTasks[i].alive = false;
+        activeTasks.splice(i, 1);
+      }
+    }
+    for (var wi = taskWaiters.length - 1; wi >= 0; wi--) {
+      if (taskWaiters[wi].scene === scName) {
+        var wr = taskWaiters.splice(wi, 1)[0];
+        try { wr.resolve(); } catch(e) {}
+      }
+    }
+    for (var ei = 0; ei < worldEntities.length; ei++) {
+      if (worldEntities[ei] && worldEntities[ei]._scene === scName) worldEntities[ei].alive = false;
+    }
+  }
+
   function applySceneSwitchNow(nxt, payload) {
     var old = currentScene;
     regSceneName(nxt);
+    while (sceneStack.length > 0) {
+      var st = sceneStack.pop();
+      if (st && st.name && st.name !== nxt) {
+        cleanupSceneArtifacts(st.name);
+        if (sceneHooks['exit:' + st.name]) {
+          sceneHooks['exit:' + st.name].forEach(function(fn) {
+            __rt._loopTicks = 0;
+            Promise.resolve(fn(payload)).catch(handleHookError);
+          });
+        }
+      }
+    }
     if (old !== nxt) {
-      timers = timers.filter(function(t) { return t.scene !== old; });
-      afterTimers = afterTimers.filter(function(t) { return t.scene !== old; });
-      tweens = tweens.filter(function(tw) {
-        if (tw.scene === old) { try { tw.resolve(tw.obj); } catch(e) {} return false; }
-        return true;
-      });
+      cleanupSceneArtifacts(old);
       if (sceneHooks['exit:' + old]) {
         sceneHooks['exit:' + old].forEach(function(fn) {
           __rt._loopTicks = 0;
@@ -3981,11 +5030,71 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     applySceneSwitchNow(nxt, actualPayload);
   }
 
+  function pushScene(nextName, payload, opts) {
+    var nxt = String(nextName || 'main');
+    var stOpts = isOptsObj(payload) && opts === undefined && (payload.dim !== undefined || payload.blur !== undefined || payload.draw !== undefined) ? payload : opts;
+    var actualPayload = stOpts === payload ? undefined : payload;
+    var o = isOptsObj(stOpts) ? stOpts : {};
+    regSceneName(nxt);
+    var snap = document.createElement('canvas');
+    snap.width = canvas.width || 1;
+    snap.height = canvas.height || 1;
+    var sctx = snap.getContext('2d');
+    try { sctx.drawImage(worldCanvas, 0, 0); } catch(e) {}
+    sceneStack.push({
+      name: currentScene,
+      sceneTime: sceneTime,
+      sceneFrame: sceneFrame,
+      snapCanvas: snap,
+      dim: o.dim !== undefined ? Math.max(0, Math.min(0.95, Number(o.dim))) : 0.45,
+      blur: o.blur !== undefined ? Math.max(0, Math.min(16, Number(o.blur))) : 0
+    });
+    currentScene = nxt;
+    sceneTime = 0;
+    sceneFrame = 0;
+    if (sceneHooks['enter:' + nxt]) {
+      inSceneScope = true;
+      try {
+        sceneHooks['enter:' + nxt].forEach(function(fn) {
+          __rt._loopTicks = 0;
+          Promise.resolve(fn(actualPayload)).catch(handleHookError);
+        });
+      } finally { inSceneScope = false; }
+    }
+  }
+
+  function popScene(result) {
+    if (sceneStack.length === 0) return null;
+    var old = currentScene;
+    cleanupSceneArtifacts(old);
+    if (sceneHooks['exit:' + old]) {
+      sceneHooks['exit:' + old].forEach(function(fn) {
+        __rt._loopTicks = 0;
+        Promise.resolve(fn(result)).catch(handleHookError);
+      });
+    }
+    var prev = sceneStack.pop();
+    currentScene = prev.name;
+    sceneTime = prev.sceneTime;
+    sceneFrame = prev.sceneFrame;
+    if (sceneHooks['resume:' + currentScene]) {
+      inSceneScope = true;
+      try {
+        sceneHooks['resume:' + currentScene].forEach(function(fn) {
+          __rt._loopTicks = 0;
+          Promise.resolve(fn(result)).catch(handleHookError);
+        });
+      } finally { inSceneScope = false; }
+    }
+    return currentScene;
+  }
+
   function drawEntitiesNow(filterTag) {
     entitiesDrawnThisFrame = true;
     for (var i = 0; i < worldEntities.length; i++) {
       var ent = worldEntities[i];
       if (!ent || ent.alive === false) continue;
+      if (ent._scene && ent._scene !== currentScene) continue;
       if (filterTag && ent.tag !== filterTag) continue;
       if (typeof ent.draw === 'function') ent.draw();
     }
@@ -4020,8 +5129,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     get name() { return currentScene; },
     get time() { return sceneTime; },
     get frame() { return sceneFrame; },
+    get depth() { return sceneStack.length; },
     is: function(n) { return currentScene === n; },
-    goto: gotoScene
+    goto: gotoScene,
+    push: pushScene,
+    pop: popScene
   };
 
   var __rt = {
@@ -4029,46 +5141,61 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     _loc: '',
     _loopTicks: 0,
     _regScene: regSceneName,
+    _runTask: _runTask,
+    _taskWait: _taskWait,
+    _isTaskDead: _isTaskDead,
     BaseEntity: BaseEntity,
     spawn: function(ent) {
       if (ent && typeof ent === 'object') {
         if (ent.alive === undefined) ent.alive = true;
+        if (ent._scene === undefined || ent._scene === null) ent._scene = resolveSceneOwner();
         worldEntities.push(ent);
       }
       return ent;
     },
     entities: function(tagName) {
-      return worldEntities.filter(function(e) { return e && e.alive !== false && (!tagName || e.tag === tagName); });
+      return worldEntities.filter(function(e) { return e && e.alive !== false && (!e._scene || e._scene === currentScene) && (!tagName || e.tag === tagName); });
     },
     destroyAll: function(tagName) {
       worldEntities.forEach(function(e) { if (e && (!tagName || e.tag === tagName)) e.alive = false; });
     },
     drawEntities: drawEntitiesNow,
     on: function(ev, fn) {
-      if (String(ev).indexOf('enter:') === 0 || String(ev).indexOf('exit:') === 0) {
-        if (!sceneHooks[ev]) sceneHooks[ev] = [];
-        sceneHooks[ev].push(fn);
-      } else if (hooks[ev]) {
-        hooks[ev].push(fn);
+      var evStr = String(ev);
+      if (evStr.indexOf('enter:') === 0 || evStr.indexOf('exit:') === 0 || evStr.indexOf('resume:') === 0) {
+        if (!sceneHooks[evStr]) sceneHooks[evStr] = [];
+        sceneHooks[evStr].push(fn);
+      } else if (hooks[evStr]) {
+        hooks[evStr].push(fn);
       }
     },
-    every: function(ms, fn) {
-      var owner = (inSceneScope || currentScene !== 'main' || registeredScenes.length <= 1) ? currentScene : null;
-      timers.push({ interval: Math.max(0.016, (Number(ms) || 1000) / 1000), acc: 0, fn: fn, scene: owner });
+    every: function(ms, fn, ownerEnt) {
+      var scOwner = resolveSceneOwner();
+      timers.push({ interval: Math.max(0.016, (Number(ms) || 1000) / 1000), acc: 0, fn: fn, scene: scOwner, owner: ownerEnt || null });
     },
-    after: function(ms, fn) {
-      var owner = (inSceneScope || currentScene !== 'main' || registeredScenes.length <= 1) ? currentScene : null;
-      afterTimers.push({ rem: Math.max(0.001, (Number(ms) || 0) / 1000), fn: fn, scene: owner });
+    after: function(ms, fn, ownerEnt) {
+      var scOwner = resolveSceneOwner();
+      afterTimers.push({ rem: Math.max(0.001, (Number(ms) || 0) / 1000), fn: fn, scene: scOwner, owner: ownerEnt || null });
     },
-    wait: function(ms) { return new Promise(function(res){ setTimeout(res, Math.max(0, Number(ms) || 0)); }); },
+    wait: function(msOrCond) { return _taskWait(null, msOrCond); },
+    spawnTask: spawnTask,
+    cancelTasks: cancelTasks,
+    setState: setStateGlobal,
     loadImage: function(p) { return loadImageAsset(p); },
     loadSound: function(p) { return loadSoundAsset(p); },
     loadJson: function(p) { return loadJsonAsset(p); },
     tilemap: tilemap,
+    tileMask: tileMask,
+    panel9: panel9,
     moveAndCollide: moveAndCollide,
+    moveCircle: moveCircle,
     raycast: raycast,
+    lineOfSight: lineOfSight,
     bounceCircle: bounceCircle,
     spatialQuery: spatialQuery,
+    steerSeek: steerSeek,
+    steerArrive: steerArrive,
+    steerSeparate: steerSeparate,
     button: button,
     panel: panel,
     scrollBegin: scrollBegin,
@@ -4110,9 +5237,12 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     },
     fx: fx,
     setShader: setShader,
+    shockwave: shockwave,
+    weather: weather,
     ambientLight: ambientLight,
     light: light,
     shadowLight: shadowLight,
+    coneLight: coneLight,
     shadowCasters: shadowCasters,
     setBlend: function(mode) { ctx.globalCompositeOperation = mode || 'source-over'; },
     setShadow: function(blur, col, ox, oy) {
@@ -4129,6 +5259,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     },
     scene: sceneObj,
     goto: gotoScene,
+    pushScene: pushScene,
+    popScene: popScene,
     tween: addTween,
     vec: vec,
     sprite: sprite,
@@ -4179,6 +5311,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     particles: spawnParticles,
     emitParticles: spawnParticles,
     camera: function(x, y, zoom) { cam.x = Number(x) || 0; cam.y = Number(y) || 0; cam.zoom = Number(zoom) || 1; cam.followTarget = null; },
+    getCamera: getCamera,
+    camX: camX,
+    camY: camY,
+    camZoom: camZoom,
+    inView: inView,
     cameraFollow: function(target, smooth) { cam.followTarget = target || null; if (smooth !== undefined) cam.followSmooth = Number(smooth) || 8; },
     cameraBounds: function(minX, minY, maxX, maxY) {
       if (minX === null || minX === undefined) { cam.bounds = null; return; }
@@ -4203,10 +5340,12 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       return (virtualAxis.active && Math.abs(virtualAxis.y) > 0.02) ? virtualAxis.y : 0;
     },
     sfx: sfx,
+    synth: synth,
     tone: tone,
     playNote: tone,
     melody: melody,
     bgm: bgm,
+    syncBgm: syncBgm,
     stopBgm: stopBgm,
     setMuted: setMuted,
     isMuted: function() { return audioMuted || tabMuted; },
@@ -4536,31 +5675,69 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       gameTime += dt;
       sceneTime += dt;
       sceneFrame++;
+      for (var swi = shockwaves.length - 1; swi >= 0; swi--) {
+        shockwaves[swi].t += dt;
+        if (shockwaves[swi].t >= shockwaves[swi].dur) shockwaves.splice(swi, 1);
+      }
       for (var ai = afterTimers.length - 1; ai >= 0; ai--) {
-        afterTimers[ai].rem -= dt;
-        if (afterTimers[ai].rem <= 0) {
-          var aft = afterTimers.splice(ai, 1)[0];
-          Promise.resolve(aft.fn()).catch(handleHookError);
+        var aftItem = afterTimers[ai];
+        if (aftItem.owner && aftItem.owner.alive === false) { afterTimers.splice(ai, 1); continue; }
+        if (aftItem.scene !== null && aftItem.scene !== currentScene) continue;
+        aftItem.rem -= dt;
+        if (aftItem.rem <= 0) {
+          afterTimers.splice(ai, 1);
+          Promise.resolve(aftItem.fn()).catch(handleHookError);
         }
       }
-      for (var ti = 0; ti < timers.length; ti++) {
-        timers[ti].acc += dt;
-        while (timers[ti].acc >= timers[ti].interval) {
-          timers[ti].acc -= timers[ti].interval;
-          Promise.resolve(timers[ti].fn()).catch(handleHookError);
+      for (var ti = timers.length - 1; ti >= 0; ti--) {
+        var tItem = timers[ti];
+        if (tItem.owner && tItem.owner.alive === false) { timers.splice(ti, 1); continue; }
+        if (tItem.scene !== null && tItem.scene !== currentScene) continue;
+        tItem.acc += dt;
+        while (tItem.acc >= tItem.interval) {
+          tItem.acc -= tItem.interval;
+          if (tItem.owner && tItem.owner.alive === false) break;
+          Promise.resolve(tItem.fn()).catch(handleHookError);
         }
       }
       for (var twi = tweens.length - 1; twi >= 0; twi--) {
         var tw = tweens[twi];
+        if (tw.scene !== null && tw.scene !== currentScene) continue;
         tw.t += dt / tw.dur;
         var k = Math.min(1, tw.t);
         tw.obj[tw.prop] = tw.from + (tw.to - tw.from) * tw.ease(k);
         if (k >= 1) { tweens.splice(twi, 1); tw.resolve(tw.obj); }
       }
+      for (var wi = taskWaiters.length - 1; wi >= 0; wi--) {
+        var w = taskWaiters[wi];
+        if (w.task && _isTaskDead(w.task)) {
+          taskWaiters.splice(wi, 1);
+          try { w.resolve(); } catch(e) {}
+          continue;
+        }
+        if (w.scene !== null && w.scene !== currentScene) continue;
+        if (w.kind === 'frames') {
+          w.frames--;
+          if (w.frames <= 0) { taskWaiters.splice(wi, 1); try { w.resolve(); } catch(e) {} }
+        } else if (w.kind === 'time') {
+          w.rem -= dt;
+          if (w.rem <= 0) { taskWaiters.splice(wi, 1); try { w.resolve(); } catch(e) {} }
+        } else if (w.kind === 'cond') {
+          var condOk = false;
+          try { condOk = !!w.fn(); } catch(err) { handleHookError(err); condOk = true; }
+          if (condOk) { taskWaiters.splice(wi, 1); try { w.resolve(); } catch(e) {} }
+        }
+      }
       for (var ei = 0; ei < worldEntities.length; ei++) {
         var ent = worldEntities[ei];
-        if (ent && ent.alive !== false && typeof ent.update === 'function') {
+        if (!ent || ent.alive === false) continue;
+        if (ent._scene && ent._scene !== currentScene) continue;
+        ent.stateTime = (ent.stateTime || 0) + dt;
+        if (typeof ent.update === 'function') {
           Promise.resolve(ent.update(dt)).catch(handleHookError);
+        }
+        if (ent._states && ent.state && ent._states[ent.state] && typeof ent._states[ent.state].update === 'function') {
+          Promise.resolve(ent._states[ent.state].update(dt)).catch(handleHookError);
         }
       }
       for (var ui = 0; ui < hooks.update.length; ui++) {
@@ -4636,7 +5813,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-    gameObj.clear();
+    if (sceneStack.length > 0) {
+      ctx.clearRect(0, 0, W, H);
+    } else {
+      gameObj.clear();
+    }
     frameCamTransform.ox = shakeOx;
     frameCamTransform.oy = shakeOy;
     frameCamTransform.active = (cam.zoom !== 1 || cam.x !== 0 || cam.y !== 0 || shakeOx !== 0 || shakeOy !== 0);
@@ -4655,6 +5836,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
     inDraw = false;
     ctx = worldCtx;
+    if (sceneStack.length === 0) updateAndDrawWeather((!frozen && dt > 0) ? dt : 0);
     ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
     var activePBlend = -1;
     for (var pj = 0; pj < pCount; pj++) {
@@ -4679,12 +5861,30 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     // 2. Half-Res 2D Lighting Multiply Pass on worldCanvas
     renderLightOverlayToWorld(shakeOx, shakeOy);
 
-    // 3. Composite World (WebGL2 Post-FX or 2D fallback) to rootCtx
+    // 3. Composite World (and Frozen Scene Stack Underlays + WebGL2 Post-FX) to rootCtx
     frameBaseCtx = rootCtx;
     ctx = rootCtx;
     rootCtx.save();
     rootCtx.setTransform(1, 0, 0, 1, 0, 0);
     rootCtx.clearRect(0, 0, canvas.width, canvas.height);
+    if (sceneStack.length > 0) {
+      rootCtx.fillStyle = gameObj.bg || '#090d16';
+      rootCtx.fillRect(0, 0, canvas.width, canvas.height);
+      for (var sti = 0; sti < sceneStack.length; sti++) {
+        var stLayer = sceneStack[sti];
+        rootCtx.save();
+        if (stLayer.blur > 0 && 'filter' in rootCtx) {
+          rootCtx.filter = 'blur(' + stLayer.blur + 'px)';
+        }
+        rootCtx.drawImage(stLayer.snapCanvas, 0, 0, canvas.width, canvas.height);
+        rootCtx.filter = 'none';
+        if (stLayer.dim > 0) {
+          rootCtx.fillStyle = 'rgba(0,0,0,' + stLayer.dim + ')';
+          rootCtx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        rootCtx.restore();
+      }
+    }
     if (runWebGLPostFx()) {
       rootCtx.drawImage(glCanvas, 0, 0, canvas.width, canvas.height);
     } else {
