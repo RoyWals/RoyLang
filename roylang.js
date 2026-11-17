@@ -1378,10 +1378,11 @@ export const RoyLang = (function() {
       'drawGradient', 'drawRadialGradient', 'layer', 'beginScreen', 'beginWorld', 'zoomAt',
       'pushMatrix', 'popMatrix', 'translate', 'rotate', 'scale', 'clip', 'unclip', 'consumeClick', 'setCursor',
       'setGamepad', 'vibrate', 'freezeFrame', 'hitStop', 'flashScreen', 'timeScale',
-      'fx', 'setShader', 'shockwave', 'weather', 'ambientLight', 'light', 'shadowLight', 'coneLight', 'shadowCasters',
-      'setBlend', 'setShadow', 'resetShadow', 'drawTrail', 'debug',
-      'scene', 'goto', 'pushScene', 'popScene', 'tween', 'vec', 'sprite', 'game', 'mouse', 'touches', 'player', 'RoySDK', 'world', 'rooms',
-      'save', 'load', 'submitScore', 'topScores', 'toast', 'openDonate', 'setBadge', 'cls', 'clear',
+      'fx', 'setShader', 'shockwave', 'weather', 'waterZone', 'ambientLight', 'light', 'shadowLight', 'coneLight', 'shadowCasters',
+      'setBlend', 'setShadow', 'resetShadow', 'drawTrail', 'ropeChain', 'limbIK', 'debug',
+      'scene', 'goto', 'pushScene', 'popScene', 'tween', 'vec', 'sprite', 'game', 'mouse', 'touches', 'player', 'RoySDK', 'world', 'rooms', 'netSync',
+      'save', 'load', 'submitScore', 'topScores', 'toast', 'openDonate', 'setBadge', 'dialogue', 'uiGrid', 'tooltip', 'cls', 'clear',
+      'ghostRecord', 'ghostStop', 'ghostPlay',
       'rect', 'circle', 'drawObj', 'drawRect', 'strokeRect', 'drawCircle', 'strokeCircle',
       'drawArc', 'drawRing', 'drawEllipse', 'drawLine', 'drawPoly', 'drawPath', 'drawCurve', 'drawBezier',
       'drawStar', 'drawBar', 'drawGrid', 'pixel', 'setFont', 'text', 'textStroke', 'textWrap', 'measureText',
@@ -2227,7 +2228,7 @@ export const RoyLang = (function() {
     };
   }
 
-  function compileToHtml(source, gameMeta, projectFiles = null, entryPath = 'main.roy') {
+  function compileToHtml(source, gameMeta, projectFiles = null, entryPath = 'main.roy', opts = null) {
     const compiled = compile(source, projectFiles, entryPath);
     const m = compiled.meta;
     const titleStr = (m && m.title) || (gameMeta && gameMeta.title) || 'RoyLang Game';
@@ -2240,6 +2241,7 @@ export const RoyLang = (function() {
     const scaleMode = String(m.scaleMode || 'fit');
     const gamepadOpt = m.gamepad;
     const safeWarningsJson = JSON.stringify(compiled.warnings || []).replace(/<\/script/gi, '<\\/script');
+    const startSceneOpt = (opts && opts.startScene) ? String(opts.startScene) : ((gameMeta && gameMeta.startScene) ? String(gameMeta.startScene) : 'main');
 
     return `<!DOCTYPE html>
 <html lang="ru">
@@ -2286,6 +2288,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   worldCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
   var ASSET_MANIFEST = ${safeAssetsJson};
   var COMPILE_WARNINGS = ${safeWarningsJson};
+  var INITIAL_START_SCENE = ${JSON.stringify(startSceneOpt)};
   var hooks = { start: [], update: [], draw: [], drawUi: [], resize: [], keydown: [], keyup: [], click: [], pointermove: [], wheel: [] };
   var sceneHooks = {};
   var registeredScenes = ['main'];
@@ -2299,6 +2302,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var virtualAxis = { x: 0, y: 0, active: false };
   var touches = [];
   var toastQueue = [];
+  var queuedTooltips = [];
   var scrollStates = {};
   var uiScrollOffset = { x: 0, y: 0, stack: [] };
   var activeSliderId = null;
@@ -2318,6 +2322,17 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var currentFps = 60;
   var debugOverlay = false;
   var debugSceneRects = [];
+  var debugGhostRects = [];
+  var profStats = { update: 0, draw: 0, light: 0, postfx: 0, ui: 0, total: 16.6 };
+  var f3GhostClip = null;
+  var ghostRec = { active: false, target: null, rate: 30, acc: 0, t: 0, maxDur: 180, frames: [], sampler: null };
+  var ghostPlayers = [];
+  var activeNetSyncs = [];
+  var dialogueState = {
+    active: false, nodesMap: {}, order: [], curKey: '', speaker: '', fullText: '',
+    shownChars: 0, speed: 48, color: '#38bdf8', portrait: null, choices: [], choiceRects: [],
+    boxRect: null, chosenResult: null, resolve: null, opts: {}, drawnThisFrame: false, audioAcc: 0
+  };
   var audioCtx = null;
   var masterComp = null;
   var noiseBuffer = null;
@@ -4604,6 +4619,1003 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     ctx.restore();
   }
 
+  // --- v6.1 2D Water Zone with Live Vertical World Reflection & Ripples ---
+  var waterReflCanvas = document.createElement('canvas');
+  var waterReflCtx = waterReflCanvas.getContext('2d');
+  function waterZone(x, y, w, h, opts) {
+    var o = isOptsObj(x) ? x : (isOptsObj(opts) ? opts : {});
+    var wx = isOptsObj(x) ? (Number(o.x) || 0) : (Number(x) || 0);
+    var wy = isOptsObj(x) ? (Number(o.y) || 0) : (Number(y) || 0);
+    var ww = Math.max(4, isOptsObj(x) ? (Number(o.w) || 200) : (Number(w) || 200));
+    var wh = Math.max(4, isOptsObj(x) ? (Number(o.h) || 80) : (Number(h) || 80));
+    var topCol = o.color || 'rgba(14, 116, 144, 0.42)';
+    var deepCol = o.deepColor || 'rgba(8, 47, 73, 0.78)';
+    var hiCol = o.highlight || 'rgba(186, 230, 253, 0.75)';
+    var reflAlpha = o.reflection === false ? 0 : Math.max(0, Math.min(1, o.reflection === undefined ? 0.42 : Number(o.reflection)));
+    var waveAmp = o.waveAmp === undefined ? 2.6 : Number(o.waveAmp);
+    var waveFreq = o.waveFreq === undefined ? 0.16 : Number(o.waveFreq);
+    var waveSpd = o.waveSpeed === undefined ? 3.8 : Number(o.waveSpeed);
+
+    var tr = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+    var scaleX = tr ? Math.abs(tr.a) : DPR;
+    var scaleY = tr ? Math.abs(tr.d) : DPR;
+    var sx = tr ? (tr.e + wx * tr.a) : (wx * DPR);
+    var sy = tr ? (tr.f + wy * tr.d) : (wy * DPR);
+    var sw = Math.max(1, Math.round(ww * scaleX));
+    var sh = Math.max(1, Math.round(wh * scaleY));
+
+    if (reflAlpha > 0 && ctx === worldCtx && sw > 2 && sh > 2 && worldCanvas.width > 0 && worldCanvas.height > 0) {
+      var srcX = Math.max(0, Math.min(worldCanvas.width - 1, Math.round(sx)));
+      var srcW = Math.max(1, Math.min(worldCanvas.width - srcX, sw));
+      var reflH = Math.min(sh, Math.max(1, Math.round(sy)));
+      var srcY = Math.max(0, Math.round(sy) - reflH);
+      if (srcW > 1 && reflH > 2) {
+        if (waterReflCanvas.width < srcW || waterReflCanvas.height < reflH) {
+          waterReflCanvas.width = Math.max(waterReflCanvas.width, srcW);
+          waterReflCanvas.height = Math.max(waterReflCanvas.height, reflH);
+        }
+        waterReflCtx.clearRect(0, 0, srcW, reflH);
+        waterReflCtx.drawImage(worldCanvas, srcX, srcY, srcW, reflH, 0, 0, srcW, reflH);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(wx, wy, ww, wh);
+        ctx.clip();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        var stripH = Math.max(2, Math.round(2 * DPR));
+        for (var ry = 0; ry < reflH; ry += stripH) {
+          var hStep = Math.min(stripH, reflH - ry);
+          var srcRow = Math.max(0, reflH - ry - hStep);
+          var prog = ry / reflH;
+          var waveDx = Math.sin(gameTime * waveSpd + ry * (waveFreq / Math.max(0.5, scaleY))) * waveAmp * scaleX * (0.35 + prog * 0.9);
+          ctx.globalAlpha = reflAlpha * (1 - prog * 0.78);
+          ctx.drawImage(waterReflCanvas, 0, srcRow, srcW, hStep, srcX + waveDx, sy + ry, srcW, hStep);
+        }
+        ctx.restore();
+      }
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(wx, wy, ww, wh);
+    ctx.clip();
+    var wg = ctx.createLinearGradient(wx, wy, wx, wy + wh);
+    wg.addColorStop(0, topCol);
+    wg.addColorStop(1, deepCol);
+    ctx.fillStyle = wg;
+    ctx.fillRect(wx, wy, ww, wh);
+
+    // Subtle caustic bands & surface wave crest
+    ctx.strokeStyle = 'rgba(224, 242, 254, 0.14)';
+    ctx.lineWidth = 1.5;
+    for (var ci = 0; ci < 3; ci++) {
+      var cyOff = wy + wh * (0.28 + ci * 0.26);
+      ctx.beginPath();
+      for (var cxp = wx; cxp <= wx + ww; cxp += 18) {
+        var cyw = cyOff + Math.sin(gameTime * (waveSpd * 0.65) + cxp * 0.045 + ci * 2.1) * (waveAmp * 0.7);
+        if (cxp === wx) ctx.moveTo(cxp, cyw);
+        else ctx.lineTo(cxp, cyw);
+      }
+      ctx.stroke();
+    }
+
+    // Animated waterline crest + entity splash disturbance
+    ctx.strokeStyle = hiCol;
+    ctx.lineWidth = Math.max(1.5, Number(o.crestWidth) || 2.2);
+    ctx.beginPath();
+    var stepX = Math.max(6, Math.min(16, ww / 24));
+    for (var px = wx; px <= wx + ww + stepX * 0.5; px += stepX) {
+      var pxClamp = Math.min(wx + ww, px);
+      var dy = Math.sin(gameTime * waveSpd + pxClamp * 0.08) * (waveAmp * 0.55);
+      for (var ei = 0; ei < worldEntities.length; ei++) {
+        var ent = worldEntities[ei];
+        if (!ent || ent.alive === false) continue;
+        var ex = Number(ent.x) || 0, ey = Number(ent.y) || 0;
+        if (Math.abs(ey - wy) < 28 && ex >= wx - 24 && ex <= wx + ww + 24) {
+          var dxEnt = pxClamp - ex;
+          var dEnt = Math.abs(dxEnt);
+          if (dEnt < 32) {
+            dy += Math.cos(dEnt * 0.25 - gameTime * 10) * (1 - dEnt / 32) * (waveAmp * 1.4);
+          }
+        }
+      }
+      if (px === wx) ctx.moveTo(pxClamp, wy + dy + 1);
+      else ctx.lineTo(pxClamp, wy + dy + 1);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // --- v6.1 Verlet Rope / Cape / Tentacle Chain ---
+  function ropeChain(x, y, count, segLen, opts) {
+    var o = isOptsObj(x) ? x : (isOptsObj(opts) ? opts : {});
+    var rx = isOptsObj(x) ? (Number(o.x) || 0) : (Number(x) || 0);
+    var ry = isOptsObj(x) ? (Number(o.y) || 0) : (Number(y) || 0);
+    var cnt = Math.max(2, Math.min(120, Math.round(isOptsObj(x) ? (o.count || 10) : (count || 10))));
+    var sl = Math.max(2, Number(isOptsObj(x) ? (o.segLen || 14) : (segLen || 14)));
+    var grav = o.gravity === undefined ? 680 : Number(o.gravity);
+    var damp = o.damping === undefined ? 0.985 : Math.max(0.5, Math.min(0.999, Number(o.damping)));
+    var stiff = Math.max(1, Math.min(20, Math.round(o.stiffness === undefined ? 6 : o.stiffness)));
+    var windVal = Number(o.wind) || 0;
+    var pinStart = o.pinStart !== false;
+    var pinEnd = !!o.pinEnd;
+    var pts = [];
+    for (var i = 0; i < cnt; i++) {
+      pts.push({ x: rx, y: ry + i * sl, ox: rx, oy: ry + i * sl, pinned: (i === 0 && pinStart) || (i === cnt - 1 && pinEnd) });
+    }
+    var chainObj = {
+      points: pts,
+      count: cnt,
+      segLen: sl,
+      gravity: grav,
+      damping: damp,
+      wind: windVal,
+      stiffness: stiff,
+      obstacles: o.obstacles || null,
+      pin: function(idx, px, py) {
+        var i0 = Math.max(0, Math.min(pts.length - 1, Math.round(idx) || 0));
+        pts[i0].pinned = true;
+        if (px !== undefined) { pts[i0].x = Number(px) || 0; pts[i0].ox = pts[i0].x; }
+        if (py !== undefined) { pts[i0].y = Number(py) || 0; pts[i0].oy = pts[i0].y; }
+        return chainObj;
+      },
+      unpin: function(idx) {
+        var i0 = Math.max(0, Math.min(pts.length - 1, Math.round(idx) || 0));
+        pts[i0].pinned = false;
+        return chainObj;
+      },
+      attachEnd: function(px, py) {
+        return chainObj.pin(pts.length - 1, px, py);
+      },
+      applyForce: function(fx, fy) {
+        for (var i = 0; i < pts.length; i++) {
+          if (pts[i].pinned) continue;
+          pts[i].ox -= (Number(fx) || 0) * 0.016;
+          pts[i].oy -= (Number(fy) || 0) * 0.016;
+        }
+      },
+      getEnd: function() { return pts[pts.length - 1]; },
+      update: function(dt, headX, headY, endX, endY) {
+        var dSec = Math.max(0.001, Math.min(0.035, dt === undefined ? 0.016 : Number(dt) || 0.016));
+        if (headX !== undefined && headY !== undefined) {
+          pts[0].pinned = true;
+          pts[0].x = Number(headX) || 0; pts[0].y = Number(headY) || 0;
+          pts[0].ox = pts[0].x; pts[0].oy = pts[0].y;
+        }
+        if (endX !== undefined && endY !== undefined) {
+          var lastP = pts[pts.length - 1];
+          lastP.pinned = true;
+          lastP.x = Number(endX) || 0; lastP.y = Number(endY) || 0;
+          lastP.ox = lastP.x; lastP.oy = lastP.y;
+        }
+        var dt2 = dSec * dSec;
+        for (var i = 0; i < pts.length; i++) {
+          var p = pts[i];
+          if (p.pinned) continue;
+          var vx = (p.x - p.ox) * chainObj.damping;
+          var vy = (p.y - p.oy) * chainObj.damping;
+          p.ox = p.x; p.oy = p.y;
+          p.x += vx + chainObj.wind * dt2;
+          p.y += vy + chainObj.gravity * dt2;
+        }
+        for (var it = 0; it < chainObj.stiffness; it++) {
+          for (var s = 0; s < pts.length - 1; s++) {
+            var a = pts[s], b = pts[s + 1];
+            var dx = b.x - a.x, dy = b.y - a.y;
+            var distVal = Math.hypot(dx, dy) || 0.0001;
+            var diff = (distVal - chainObj.segLen) / distVal;
+            if (a.pinned && b.pinned) continue;
+            if (a.pinned) {
+              b.x -= dx * diff; b.y -= dy * diff;
+            } else if (b.pinned) {
+              a.x += dx * diff; a.y += dy * diff;
+            } else {
+              a.x += dx * diff * 0.5; a.y += dy * diff * 0.5;
+              b.x -= dx * diff * 0.5; b.y -= dy * diff * 0.5;
+            }
+          }
+          if (chainObj.obstacles) {
+            var obs = chainObj.obstacles;
+            for (var oi = 0; oi < pts.length; oi++) {
+              var pt = pts[oi];
+              if (pt.pinned) continue;
+              if (obs._isTilemap) {
+                var tx = Math.floor(pt.x / obs.tileSize), ty = Math.floor(pt.y / obs.tileSize);
+                if (obs.solidAt(tx, ty)) {
+                  var cxT = (tx + 0.5) * obs.tileSize, cyT = (ty + 0.5) * obs.tileSize;
+                  var ddx = pt.x - cxT, ddy = pt.y - cyT;
+                  if (Math.abs(ddx) > Math.abs(ddy)) pt.x = ddx > 0 ? (tx + 1) * obs.tileSize + 1 : tx * obs.tileSize - 1;
+                  else pt.y = ddy > 0 ? (ty + 1) * obs.tileSize + 1 : ty * obs.tileSize - 1;
+                }
+              }
+            }
+          }
+        }
+        return chainObj;
+      },
+      draw: function(drawOpts) {
+        var do2 = isOptsObj(drawOpts) ? drawOpts : {};
+        var w0 = Number(do2.width !== undefined ? do2.width : (o.width !== undefined ? o.width : 4));
+        var w1 = Number(do2.widthEnd !== undefined ? do2.widthEnd : (o.widthEnd !== undefined ? o.widthEnd : w0));
+        var c0 = do2.color || o.color || '#f59e0b';
+        var c1 = do2.colorEnd || o.colorEnd || c0;
+        var nRad = Number(do2.nodeRadius !== undefined ? do2.nodeRadius : (o.nodeRadius || 0));
+        var nCol = do2.nodeColor || o.nodeColor || c0;
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        if (w0 === w1 && c0 === c1) {
+          ctx.strokeStyle = c0;
+          ctx.lineWidth = w0;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.stroke();
+        } else {
+          for (var j = 0; j < pts.length - 1; j++) {
+            var t = j / Math.max(1, pts.length - 2);
+            ctx.strokeStyle = lerpColor(c0, c1, t);
+            ctx.lineWidth = Math.max(0.5, w0 + (w1 - w0) * t);
+            ctx.beginPath();
+            ctx.moveTo(pts[j].x, pts[j].y);
+            ctx.lineTo(pts[j + 1].x, pts[j + 1].y);
+            ctx.stroke();
+          }
+        }
+        if (nRad > 0) {
+          ctx.fillStyle = nCol;
+          for (var ni = 0; ni < pts.length; ni++) {
+            ctx.beginPath();
+            ctx.arc(pts[ni].x, pts[ni].y, nRad, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+    };
+    return chainObj;
+  }
+
+  // --- v6.1 Analytical 2-Bone Inverse Kinematics ---
+  function limbIK(rx, ry, l1, l2, tx, ty, flipOrOpts) {
+    var o = isOptsObj(flipOrOpts) ? flipOrOpts : {};
+    var flip = isOptsObj(flipOrOpts) ? !!o.flip : !!flipOrOpts;
+    var aLen = Math.max(1, Number(l1) || 24), bLen = Math.max(1, Number(l2) || 24);
+    var x0 = Number(rx) || 0, y0 = Number(ry) || 0, xT = Number(tx) || 0, yT = Number(ty) || 0;
+    var dx = xT - x0, dy = yT - y0;
+    var origD = Math.hypot(dx, dy);
+    var minD = Math.max(0.001, Math.abs(aLen - bLen) + 0.001);
+    var maxD = Math.max(minD + 0.001, aLen + bLen - 0.001);
+    var d = Math.max(minD, Math.min(maxD, origD || 0.001));
+    var baseAng = Math.atan2(dy, dx);
+    var cosA = Math.max(-1, Math.min(1, (aLen * aLen + d * d - bLen * bLen) / (2 * aLen * d)));
+    var offsetA = Math.acos(cosA);
+    var ang1 = baseAng + (flip ? -offsetA : offsetA);
+    var jx = x0 + Math.cos(ang1) * aLen;
+    var jy = y0 + Math.sin(ang1) * aLen;
+    var ang2 = Math.atan2(yT - jy, xT - jx);
+    if (origD > maxD || origD < minD) {
+      ang2 = Math.atan2((y0 + Math.sin(baseAng) * d) - jy, (x0 + Math.cos(baseAng) * d) - jx);
+    }
+    var ex = jx + Math.cos(ang2) * bLen;
+    var ey = jy + Math.sin(ang2) * bLen;
+    var res = {
+      x: x0, y: y0, jointX: jx, jointY: jy, endX: ex, endY: ey,
+      angle1: ang1, angle2: ang2, dist: d, reached: origD <= aLen + bLen + 0.01,
+      draw: function(drawOpts) {
+        var do2 = isOptsObj(drawOpts) ? drawOpts : o;
+        var lw1 = Number(do2.width1 !== undefined ? do2.width1 : (do2.width || 6));
+        var lw2 = Number(do2.width2 !== undefined ? do2.width2 : Math.max(2, lw1 * 0.78));
+        var col1 = do2.color || '#cbd5e1';
+        var col2 = do2.color2 || col1;
+        var jCol = do2.jointColor || '#38bdf8';
+        var eCol = do2.endColor || '#f43f5e';
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = col1; ctx.lineWidth = lw1;
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(jx, jy); ctx.stroke();
+        ctx.strokeStyle = col2; ctx.lineWidth = lw2;
+        ctx.beginPath(); ctx.moveTo(jx, jy); ctx.lineTo(ex, ey); ctx.stroke();
+        if (do2.joints !== false) {
+          ctx.fillStyle = jCol;
+          ctx.beginPath(); ctx.arc(jx, jy, Math.max(2.5, lw1 * 0.55), 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = eCol;
+          ctx.beginPath(); ctx.arc(ex, ey, Math.max(2.2, lw2 * 0.55), 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.restore();
+        return res;
+      }
+    };
+    if (o.draw) res.draw(o);
+    return res;
+  }
+
+  // --- v6.1 Inventory / Shop UI Grid + Screen-Safe Tooltip ---
+  function tooltip(textOrOpts, tx, ty) {
+    var o = isOptsObj(textOrOpts) ? textOrOpts : {};
+    var bodyStr = isOptsObj(textOrOpts) ? String(o.text || o.desc || '') : String(textOrOpts === undefined || textOrOpts === null ? '' : textOrOpts);
+    var titleStr = o.title ? String(o.title) : '';
+    if (!bodyStr && !titleStr) return;
+    queuedTooltips.push({
+      title: titleStr,
+      text: bodyStr,
+      bg: o.bg || 'rgba(15, 23, 42, 0.96)',
+      border: o.border || '#38bdf8',
+      color: o.color || '#e2e8f0',
+      titleColor: o.titleColor || '#f8fafc',
+      maxW: Math.max(120, Math.min(W - 32, Number(o.maxW) || 260)),
+      x: tx !== undefined ? Number(tx) : (o.x !== undefined ? Number(o.x) : (mouse.x + 14)),
+      y: ty !== undefined ? Number(ty) : (o.y !== undefined ? Number(o.y) : (mouse.y + 18))
+    });
+  }
+
+  function renderQueuedTooltips() {
+    if (queuedTooltips.length === 0) return;
+    ctx = rootCtx;
+    ctx.save();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    for (var i = 0; i < queuedTooltips.length; i++) {
+      var tt = queuedTooltips[i];
+      var pad = 10, maxInner = tt.maxW - pad * 2;
+      ctx.font = '700 13px ' + fontFamily;
+      var tLines = [];
+      if (tt.title) tLines.push({ text: tt.title, bold: true, col: tt.titleColor });
+      ctx.font = '500 12px ' + fontFamily;
+      var rawLines = String(tt.text || '').split('\\n');
+      for (var ri = 0; ri < rawLines.length; ri++) {
+        var words = rawLines[ri].split(' ');
+        var cur = '';
+        for (var wi = 0; wi < words.length; wi++) {
+          var cand = cur ? (cur + ' ' + words[wi]) : words[wi];
+          if (ctx.measureText(cand).width > maxInner && cur) {
+            tLines.push({ text: cur, bold: false, col: tt.color });
+            cur = words[wi];
+          } else cur = cand;
+        }
+        if (cur || words.length === 1) tLines.push({ text: cur, bold: false, col: tt.color });
+      }
+      var maxLineW = 40;
+      for (var li = 0; li < tLines.length; li++) {
+        ctx.font = (tLines[li].bold ? '700 13px ' : '500 12px ') + fontFamily;
+        var lw = ctx.measureText(tLines[li].text).width;
+        if (lw > maxLineW) maxLineW = lw;
+      }
+      var bw = Math.min(tt.maxW, maxLineW + pad * 2);
+      var lineH = 16;
+      var bh = pad * 2 + tLines.length * lineH + (tt.title && tt.text ? 4 : 0);
+      var bx = Math.max(8, Math.min(W - bw - 8, tt.x));
+      var by = Math.max(8, Math.min(H - bh - 8, tt.y));
+      drawRect(bx, by, bw, bh, tt.bg, 8);
+      strokeRect(bx, by, bw, bh, tt.border, 1.5);
+      var curY = by + pad;
+      for (var lj = 0; lj < tLines.length; lj++) {
+        var ln = tLines[lj];
+        ctx.font = (ln.bold ? '700 13px ' : '500 12px ') + fontFamily;
+        ctx.fillStyle = ln.col;
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillText(ln.text, bx + pad, curY);
+        curY += lineH + (ln.bold && tt.text ? 4 : 0);
+      }
+    }
+    ctx.restore();
+    queuedTooltips.length = 0;
+  }
+
+  function uiGrid(x, y, cols, rows, cellSizeOrOpts, items, drawCellFn) {
+    var o = isOptsObj(x) ? x : (isOptsObj(cellSizeOrOpts) ? cellSizeOrOpts : {});
+    var gx = isOptsObj(x) ? (Number(o.x) || 0) : (Number(x) || 0);
+    var gy = isOptsObj(x) ? (Number(o.y) || 0) : (Number(y) || 0);
+    var gCols = Math.max(1, Math.round(isOptsObj(x) ? (o.cols || 4) : (cols || 4)));
+    var gRows = Math.max(1, Math.round(isOptsObj(x) ? (o.rows || 4) : (rows || 4)));
+    var cw = Number(o.cellW !== undefined ? o.cellW : (o.cellSize !== undefined ? o.cellSize : (!isOptsObj(x) && !isOptsObj(cellSizeOrOpts) && cellSizeOrOpts !== undefined ? cellSizeOrOpts : 48)));
+    var ch = Number(o.cellH !== undefined ? o.cellH : cw);
+    var gap = Number(o.gap !== undefined ? o.gap : 6);
+    var pad = Number(o.pad !== undefined ? o.pad : 8);
+    var rad = Number(o.radius !== undefined ? o.radius : 8);
+    var itemList = Array.isArray(o.items) ? o.items : (Array.isArray(items) ? items : (typeof items === 'function' ? [] : []));
+    var cb = typeof drawCellFn === 'function' ? drawCellFn : (typeof items === 'function' ? items : (typeof o.draw === 'function' ? o.draw : null));
+    var selectedIdx = o.selected !== undefined ? Number(o.selected) : -1;
+
+    var totalW = pad * 2 + gCols * cw + (gCols - 1) * gap;
+    var totalH = pad * 2 + gRows * ch + (gRows - 1) * gap;
+    if (o.bg !== null) {
+      drawRect(gx, gy, totalW, totalH, o.bg || 'rgba(15, 23, 42, 0.88)', rad);
+      if (o.border !== null) strokeRect(gx, gy, totalW, totalH, o.border || 'rgba(148, 163, 184, 0.35)', 1.5);
+    }
+
+    var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
+    if (mx >= gx && mx <= gx + totalW && my >= gy && my <= gy + totalH) mouse.overUi = true;
+
+    var hoveredIndex = -1, clickedIndex = -1, rightClickedIndex = -1;
+    var cells = [];
+    for (var r = 0; r < gRows; r++) {
+      for (var c = 0; c < gCols; c++) {
+        var idx = r * gCols + c;
+        var cx = gx + pad + c * (cw + gap);
+        var cy = gy + pad + r * (ch + gap);
+        var hov = mx >= cx && mx <= cx + cw && my >= cy && my <= cy + ch;
+        var isSel = idx === selectedIdx;
+        if (hov) {
+          hoveredIndex = idx;
+          mouse.overUi = true;
+          if (mouse.clicked) clickedIndex = idx;
+          if (mouse.rightClicked) rightClickedIndex = idx;
+        }
+        var cellBg = isSel ? (o.cellSelected || 'rgba(56, 189, 248, 0.25)') : (hov ? (o.cellHover || 'rgba(51, 65, 85, 0.9)') : (o.cellBg || 'rgba(30, 41, 59, 0.78)'));
+        var cellBdr = isSel ? '#38bdf8' : (hov ? '#7dd3fc' : 'rgba(148, 163, 184, 0.24)');
+        drawRect(cx, cy, cw, ch, cellBg, Math.min(rad, 6));
+        strokeRect(cx, cy, cw, ch, cellBdr, isSel ? 2 : 1);
+
+        var it = idx < itemList.length ? itemList[idx] : null;
+        if (cb) {
+          cb(idx, cx, cy, cw, ch, c, r, hov, it);
+        } else if (it) {
+          if (it.sprite && typeof it.sprite.draw === 'function') {
+            it.sprite.draw(cx + cw * 0.5, cy + ch * 0.5, 0, Math.min(1, (cw - 10) / 32));
+          } else if (it.color) {
+            drawRect(cx + 8, cy + 8, cw - 16, ch - 16, it.color, 4);
+          }
+          var lbl = it.icon || it.label || it.name;
+          if (lbl !== undefined && lbl !== null) {
+            text(String(lbl), cx + cw * 0.5, cy + ch * 0.5 - 6, it.textColor || '#f8fafc', Math.min(14, Math.max(10, cw * 0.26)), 'center');
+          }
+          if (it.count !== undefined && Number(it.count) > 1) {
+            text('x' + it.count, cx + cw - 4, cy + ch - 14, '#fde047', 11, 'right');
+          }
+          if (hov && (it.tooltip || it.desc || it.name)) {
+            tooltip(it.tooltip || { title: it.name || '', text: it.desc || '' });
+          }
+        }
+        cells.push({ index: idx, x: cx, y: cy, w: cw, h: ch, col: c, row: r, hovered: hov, item: it });
+      }
+    }
+    return {
+      hoveredIndex: hoveredIndex,
+      clickedIndex: clickedIndex,
+      rightClickedIndex: rightClickedIndex,
+      hoveredItem: hoveredIndex >= 0 && hoveredIndex < itemList.length ? itemList[hoveredIndex] : null,
+      clickedItem: clickedIndex >= 0 && clickedIndex < itemList.length ? itemList[clickedIndex] : null,
+      width: totalW,
+      height: totalH,
+      cells: cells
+    };
+  }
+
+  // --- v6.1 Visual Novel / RPG Dialogue Engine ---
+  function _loadDialogueNode(key) {
+    var node = dialogueState.nodesMap[key];
+    if (!node) {
+      _closeDialogue(dialogueState.chosenResult);
+      return;
+    }
+    dialogueState.curKey = key;
+    dialogueState.speaker = node.speaker ? String(node.speaker) : '';
+    dialogueState.fullText = String(node.text !== undefined ? node.text : (typeof node === 'string' ? node : ''));
+    dialogueState.shownChars = 0;
+    dialogueState.speed = Number(node.speed !== undefined ? node.speed : (dialogueState.opts.speed || 48));
+    dialogueState.color = node.color || dialogueState.opts.color || '#38bdf8';
+    dialogueState.portrait = node.portrait || null;
+    dialogueState.choices = Array.isArray(node.choices) ? node.choices.filter(function(ch) { return !ch.cond || ch.cond(); }) : [];
+    dialogueState.choiceRects = [];
+    dialogueState.cooldown = 0.08;
+    if (typeof node.onEnter === 'function') {
+      try { node.onEnter(node); } catch(e) { handleHookError(e); }
+    }
+  }
+
+  function _closeDialogue(res) {
+    if (!dialogueState.active) return;
+    var rFn = dialogueState.resolve;
+    dialogueState.active = false;
+    dialogueState.resolve = null;
+    dialogueState.choices = [];
+    dialogueState.choiceRects = [];
+    if (rFn) rFn(res !== undefined ? res : dialogueState.chosenResult);
+  }
+
+  function _advanceDialogue() {
+    if (!dialogueState.active || dialogueState.cooldown > 0) return;
+    if (dialogueState.shownChars < dialogueState.fullText.length) {
+      dialogueState.shownChars = dialogueState.fullText.length;
+      return;
+    }
+    var cur = dialogueState.nodesMap[dialogueState.curKey];
+    if (dialogueState.choices.length > 0) return;
+    if (cur && cur.next !== undefined && cur.next !== null) {
+      _loadDialogueNode(String(cur.next));
+    } else {
+      var curIdx = dialogueState.order.indexOf(dialogueState.curKey);
+      if (curIdx >= 0 && curIdx + 1 < dialogueState.order.length && (!cur || cur.next !== null)) {
+        _loadDialogueNode(dialogueState.order[curIdx + 1]);
+      } else {
+        _closeDialogue(dialogueState.chosenResult);
+      }
+    }
+  }
+
+  function _pickDialogueChoice(idx) {
+    if (!dialogueState.active) return false;
+    var ch = dialogueState.choices[idx];
+    if (!ch) return false;
+    dialogueState.chosenResult = ch.value !== undefined ? ch.value : (ch.id !== undefined ? ch.id : idx);
+    if (typeof ch.onSelect === 'function') {
+      try { ch.onSelect(ch, idx); } catch(e) { handleHookError(e); }
+    }
+    if (ch.next !== undefined && ch.next !== null) {
+      _loadDialogueNode(String(ch.next));
+    } else {
+      _closeDialogue(dialogueState.chosenResult);
+    }
+    return true;
+  }
+
+  function dialogueHandleKey(e) {
+    if (!dialogueState.active) return false;
+    if (e.key === ' ' || e.code === 'Space' || e.key === 'Enter') {
+      _advanceDialogue();
+      return true;
+    }
+    if (dialogueState.choices.length > 0 && dialogueState.shownChars >= dialogueState.fullText.length) {
+      var n = parseInt(e.key, 10);
+      if (n >= 1 && n <= dialogueState.choices.length) {
+        _pickDialogueChoice(n - 1);
+        return true;
+      }
+    }
+    if (e.key === 'Escape' && dialogueState.opts.skippable) {
+      _closeDialogue(null);
+      return true;
+    }
+    return false;
+  }
+
+  function dialogueHandleClick(sx, sy) {
+    if (!dialogueState.active) return false;
+    for (var i = 0; i < dialogueState.choiceRects.length; i++) {
+      var r = dialogueState.choiceRects[i];
+      if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) {
+        _pickDialogueChoice(i);
+        return true;
+      }
+    }
+    var b = dialogueState.boxRect;
+    if (b && sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h) {
+      _advanceDialogue();
+      return true;
+    }
+    return false;
+  }
+
+  function renderDialogueOverlay(forceDraw) {
+    if (!dialogueState.active) return;
+    if (!forceDraw && dialogueState.drawnThisFrame) return;
+    dialogueState.drawnThisFrame = true;
+    ctx = rootCtx;
+    ctx.save();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    var o = dialogueState.opts;
+    var bw = Math.min(W - 32, Number(o.width) || 680);
+    var bh = Math.min(H - 32, Number(o.height) || 138);
+    var bx = o.x !== undefined ? Number(o.x) : (W - bw) * 0.5;
+    var by = o.y !== undefined ? Number(o.y) : (H - bh - 18);
+    dialogueState.boxRect = { x: bx, y: by, w: bw, h: bh };
+    if (mouse.x >= bx && mouse.x <= bx + bw && mouse.y >= by && mouse.y <= by + bh) mouse.overUi = true;
+
+    drawRect(bx, by, bw, bh, o.bg || 'rgba(9, 13, 26, 0.94)', 12);
+    strokeRect(bx, by, bw, bh, dialogueState.color, 2);
+
+    var textStartX = bx + 18;
+    var textMaxW = bw - 36;
+    if (dialogueState.portrait) {
+      var pBox = bh - 24;
+      drawRect(bx + 12, by + 12, pBox, pBox, 'rgba(30, 41, 59, 0.85)', 8);
+      strokeRect(bx + 12, by + 12, pBox, pBox, 'rgba(148,163,184,0.35)', 1);
+      if (typeof dialogueState.portrait.draw === 'function') {
+        dialogueState.portrait.draw(bx + 12 + pBox * 0.5, by + 12 + pBox * 0.5, 0, 1);
+      } else {
+        text(String(dialogueState.portrait), bx + 12 + pBox * 0.5, by + 12 + pBox * 0.5 - 12, '#f8fafc', 26, 'center');
+      }
+      textStartX += pBox + 12;
+      textMaxW -= pBox + 12;
+    }
+
+    if (dialogueState.speaker) {
+      var spW = Math.max(90, measureTextBox(dialogueState.speaker, 14).width + 24);
+      drawRect(bx + 16, by - 14, spW, 24, dialogueState.color, 6);
+      text(dialogueState.speaker, bx + 16 + spW * 0.5, by - 9, '#090d16', 13, 'center');
+    }
+
+    var visText = dialogueState.fullText.slice(0, Math.floor(dialogueState.shownChars));
+    textWrap(visText, textStartX, by + 20, textMaxW, o.textColor || '#f1f5f9', Number(o.fontSize) || 16, 'left', 22);
+
+    var fullyShown = dialogueState.shownChars >= dialogueState.fullText.length;
+    dialogueState.choiceRects.length = 0;
+    if (fullyShown && dialogueState.choices.length > 0) {
+      var chLen = dialogueState.choices.length;
+      for (var ci = 0; ci < chLen; ci++) {
+        var ch = dialogueState.choices[ci];
+        var chH = 32;
+        var chW = Math.min(340, bw - 32);
+        var chX = bx + bw - chW - 12;
+        var chY = by - 16 - (chLen - ci) * (chH + 6);
+        var hovC = mouse.x >= chX && mouse.x <= chX + chW && mouse.y >= chY && mouse.y <= chY + chH;
+        if (hovC) mouse.overUi = true;
+        drawRect(chX, chY, chW, chH, hovC ? dialogueState.color : 'rgba(15, 23, 42, 0.95)', 7);
+        strokeRect(chX, chY, chW, chH, dialogueState.color, 1.5);
+        text((ci + 1) + '. ' + String(ch.text || ch.label || ''), chX + 12, chY + 9, hovC ? '#090d16' : '#f8fafc', 13, 'left');
+        dialogueState.choiceRects.push({ x: chX, y: chY, w: chW, h: chH });
+      }
+    } else if (fullyShown && Math.floor(gameTime * 3) % 2 === 0) {
+      text('▼ Space / Click', bx + bw - 14, by + bh - 22, dialogueState.color, 11, 'right');
+    }
+    ctx.restore();
+  }
+
+  function dialogue(script, opts) {
+    var o = isOptsObj(opts) ? opts : {};
+    if (dialogueState.active) _closeDialogue(null);
+    var nodesMap = {};
+    var order = [];
+    if (typeof script === 'string') {
+      nodesMap['0'] = { text: script, speaker: o.speaker || '' };
+      order.push('0');
+    } else if (Array.isArray(script)) {
+      for (var i = 0; i < script.length; i++) {
+        var item = typeof script[i] === 'string' ? { text: script[i] } : script[i];
+        var k = String(item && item.id !== undefined ? item.id : i);
+        nodesMap[k] = item || { text: '' };
+        order.push(k);
+      }
+    } else if (script && typeof script === 'object') {
+      Object.keys(script).forEach(function(k) {
+        nodesMap[k] = script[k];
+        order.push(k);
+      });
+    }
+    dialogueState.nodesMap = nodesMap;
+    dialogueState.order = order;
+    dialogueState.opts = o;
+    dialogueState.chosenResult = null;
+    dialogueState.drawnThisFrame = false;
+    var p = new Promise(function(resolve) {
+      dialogueState.resolve = resolve;
+    });
+    if (order.length === 0) {
+      dialogueState.active = false;
+      dialogueState.resolve(null);
+      dialogueState.resolve = null;
+      return p;
+    }
+    dialogueState.active = true;
+    var startK = (o.startNode && nodesMap[o.startNode]) ? String(o.startNode) : (nodesMap.start ? 'start' : order[0]);
+    _loadDialogueNode(startK);
+    p.close = _closeDialogue;
+    p.next = _advanceDialogue;
+    p.choose = _pickDialogueChoice;
+    p.draw = function() { renderDialogueOverlay(true); };
+    return p;
+  }
+  Object.defineProperty(dialogue, 'active', { get: function() { return dialogueState.active; } });
+  dialogue.close = _closeDialogue;
+  dialogue.next = _advanceDialogue;
+  dialogue.choose = _pickDialogueChoice;
+  dialogue.draw = function() { renderDialogueOverlay(true); };
+
+  // --- v6.1 Ghost Snapshots (Speedrun / Replay Recording & Playback) ---
+  function ghostRecord(targetOrSampler, opts) {
+    var o = isOptsObj(opts) ? opts : (isOptsObj(targetOrSampler) ? targetOrSampler : {});
+    var tgt = typeof targetOrSampler === 'function' ? null : (isOptsObj(targetOrSampler) ? (o.target || cam.followTarget || worldEntities[0]) : (targetOrSampler || cam.followTarget || worldEntities[0]));
+    ghostRec.active = true;
+    ghostRec.target = tgt || null;
+    ghostRec.sampler = typeof targetOrSampler === 'function' ? targetOrSampler : null;
+    ghostRec.rate = Math.max(5, Math.min(60, Number(o.hz || o.rate) || 30));
+    ghostRec.maxDur = Math.max(5, Number(o.maxDur) || 180);
+    ghostRec.acc = 1 / ghostRec.rate;
+    ghostRec.t = 0;
+    ghostRec.frames = [];
+    return ghostRec;
+  }
+
+  function ghostStop() {
+    ghostRec.active = false;
+    var clip = { version: 1, dur: ghostRec.t, frames: ghostRec.frames.slice() };
+    f3GhostClip = clip;
+    return clip;
+  }
+
+  function _sampleGhostFrames(frames, tSec) {
+    if (!frames || frames.length === 0) return null;
+    if (frames.length === 1 || tSec <= frames[0].t) return frames[0];
+    var last = frames[frames.length - 1];
+    if (tSec >= last.t) return last;
+    var lo = 0, hi = frames.length - 1;
+    while (lo + 1 < hi) {
+      var mid = (lo + hi) >> 1;
+      if (frames[mid].t <= tSec) lo = mid; else hi = mid;
+    }
+    var a = frames[lo], b = frames[hi];
+    var span = (b.t - a.t) || 0.0001;
+    var k = Math.max(0, Math.min(1, (tSec - a.t) / span));
+    return {
+      t: tSec,
+      x: a.x + (b.x - a.x) * k,
+      y: a.y + (b.y - a.y) * k,
+      rot: a.rot + (b.rot - a.rot) * k,
+      w: a.w, h: a.h, r: a.r, _shape: a._shape, state: a.state
+    };
+  }
+
+  function ghostPlay(clip, drawFnOrOpts) {
+    var frames = Array.isArray(clip) ? clip : (clip && Array.isArray(clip.frames) ? clip.frames : []);
+    var o = isOptsObj(drawFnOrOpts) ? drawFnOrOpts : {};
+    var dur = frames.length ? (frames[frames.length - 1].t || 0.01) : 0;
+    var gp = {
+      active: frames.length > 0,
+      done: frames.length === 0,
+      time: 0,
+      dur: dur,
+      speed: Number(o.speed !== undefined ? o.speed : 1),
+      loop: !!o.loop,
+      color: o.color || '#38bdf8',
+      alpha: o.alpha !== undefined ? Number(o.alpha) : 0.42,
+      customDraw: typeof drawFnOrOpts === 'function' ? drawFnOrOpts : (typeof o.draw === 'function' ? o.draw : null),
+      sample: function(tOpt) { return _sampleGhostFrames(frames, tOpt !== undefined ? Number(tOpt) : gp.time); },
+      stop: function() { gp.active = false; gp.done = true; },
+      get progress() { return gp.dur > 0 ? Math.min(1, gp.time / gp.dur) : 1; },
+      draw: function() {
+        var smp = _sampleGhostFrames(frames, gp.time);
+        if (!smp) return;
+        if (gp.customDraw) { gp.customDraw(smp); return; }
+        ctx.save();
+        ctx.globalAlpha = gp.alpha;
+        if (o.sprite && typeof o.sprite.draw === 'function') {
+          o.sprite.draw(smp.x, smp.y, smp.rot, 1, false);
+        } else if (smp._shape === 'circle' || (smp.r && !smp.w)) {
+          drawCircle(smp.x, smp.y, Number(o.radius || smp.r || 12), gp.color);
+          strokeCircle(smp.x, smp.y, Number(o.radius || smp.r || 12) + 2, '#e0f2fe', 1.5);
+        } else {
+          var gw = Number(smp.w || 24), gh = Number(smp.h || 24);
+          drawRect(smp.x, smp.y, gw, gh, gp.color, 5);
+          strokeRect(smp.x, smp.y, gw, gh, '#e0f2fe', 1.5);
+        }
+        ctx.restore();
+      }
+    };
+    if (gp.active) ghostPlayers.push(gp);
+    return gp;
+  }
+
+  function updateAndDrawGhosts(dt, doDraw) {
+    if (ghostRec.active && dt > 0 && !doDraw) {
+      ghostRec.t += dt;
+      ghostRec.acc += dt;
+      var stepS = 1 / ghostRec.rate;
+      if (ghostRec.acc >= stepS) {
+        ghostRec.acc -= stepS;
+        var smp = null;
+        if (ghostRec.sampler) {
+          var cs = ghostRec.sampler();
+          if (cs && typeof cs === 'object') smp = Object.assign({ t: ghostRec.t, x: 0, y: 0, rot: 0 }, cs);
+        } else if (ghostRec.target) {
+          var tg = ghostRec.target;
+          smp = {
+            t: ghostRec.t, x: Number(tg.x) || 0, y: Number(tg.y) || 0, rot: Number(tg.rot) || 0,
+            w: tg.w, h: tg.h, r: tg.r, _shape: tg._shape, state: tg.state
+          };
+        }
+        if (smp) ghostRec.frames.push(smp);
+        if (ghostRec.t >= ghostRec.maxDur) ghostStop();
+      }
+    }
+    if (!doDraw) {
+      for (var i = ghostPlayers.length - 1; i >= 0; i--) {
+        var gp = ghostPlayers[i];
+        if (!gp.active) { ghostPlayers.splice(i, 1); continue; }
+        gp.time += dt * gp.speed;
+        if (gp.time >= gp.dur) {
+          if (gp.loop && gp.dur > 0) gp.time = gp.time % gp.dur;
+          else { gp.time = gp.dur; gp.done = true; gp.active = false; }
+        }
+      }
+    } else {
+      for (var j = 0; j < ghostPlayers.length; j++) {
+        if (ghostPlayers[j].active) ghostPlayers[j].draw();
+      }
+    }
+  }
+
+  // --- v6.1 Real-Time Multiplayer NetSync over RoySDK.rooms ---
+  function netSync(targetOrOpts, opts) {
+    var o = isOptsObj(opts) ? opts : (isOptsObj(targetOrOpts) ? targetOrOpts : {});
+    var localEnt = isOptsObj(targetOrOpts) ? (o.entity || o.target || null) : (targetOrOpts || null);
+    var props = Array.isArray(o.props) ? o.props : ['x', 'y', 'vx', 'vy', 'rot', 'state'];
+    var sendRate = Math.max(2, Math.min(30, Number(o.rate) || 15));
+    var interpSpd = Math.max(1, Math.min(40, Number(o.interpolate) || 14));
+    var me = sdk.player.getSync();
+    var myId = String(me.username || 'guest').replace(/[^a-zA-Z0-9_-]/g, '_') + '_' + Math.random().toString(36).slice(2, 6);
+    var peerPrefix = '_p_';
+    var stateCache = {};
+    var peersById = {};
+    var listeners = {};
+    var unsubs = [];
+    var stopped = false;
+
+    var ns = {
+      id: myId,
+      connected: false,
+      roomId: '',
+      isHost: false,
+      sendAcc: 0,
+      lastSentJson: '',
+      sharedState: {},
+      stop: function() {
+        stopped = true;
+        ns.connected = false;
+        while (unsubs.length) {
+          var u = unsubs.pop();
+          try { if (typeof u === 'function') u(); } catch(e) {}
+        }
+        var ix = activeNetSyncs.indexOf(ns);
+        if (ix >= 0) activeNetSyncs.splice(ix, 1);
+      },
+      on: function(evName, fn) {
+        if (typeof fn !== 'function') return;
+        if (!listeners[evName]) listeners[evName] = [];
+        listeners[evName].push(fn);
+      },
+      send: function(evName, payload) {
+        if (!ns.connected || !sdk.rooms || typeof sdk.rooms.sendEvent !== 'function') return Promise.resolve(false);
+        var pl = (payload && typeof payload === 'object') ? Object.assign({}, payload, { _fromNetId: myId }) : { value: payload, _fromNetId: myId };
+        return sdk.rooms.sendEvent(evName, pl);
+      },
+      setShared: function(keyOrPatch, val) {
+        if (!ns.connected || !sdk.rooms || typeof sdk.rooms.setState !== 'function') return Promise.resolve(false);
+        var patch = typeof keyOrPatch === 'object' ? keyOrPatch : (function(){ var p = {}; p[String(keyOrPatch)] = val; return p; })();
+        return sdk.rooms.setState(patch);
+      },
+      getShared: function(key, defVal) {
+        return Object.prototype.hasOwnProperty.call(ns.sharedState, key) ? ns.sharedState[key] : defVal;
+      },
+      peers: function() {
+        var out = [];
+        var nowMs = Date.now();
+        Object.keys(peersById).forEach(function(pid) {
+          var p = peersById[pid];
+          if (nowMs - (p.ts || nowMs) < 15000) out.push(p);
+        });
+        return out;
+      },
+      allPeers: function() {
+        var list = ns.peers();
+        if (localEnt) {
+          var selfObj = { id: myId, name: me.username || myId, self: true, x: localEnt.x || 0, y: localEnt.y || 0, rot: localEnt.rot || 0, state: localEnt.state };
+          list.unshift(selfObj);
+        }
+        return list;
+      },
+      drawPeers: function(customFn) {
+        var fn = typeof customFn === 'function' ? customFn : (typeof o.drawPeer === 'function' ? o.drawPeer : null);
+        var list = ns.peers();
+        for (var i = 0; i < list.length; i++) {
+          var pr = list[i];
+          if (fn) { fn(pr); continue; }
+          ctx.save();
+          drawCircle(pr.x || 0, pr.y || 0, 14, '#38bdf8');
+          strokeCircle(pr.x || 0, pr.y || 0, 14, '#f8fafc', 2);
+          text(String(pr.name || pr.id), pr.x || 0, (pr.y || 0) - 24, '#e2e8f0', 11, 'center');
+          ctx.restore();
+        }
+      },
+      _attachSubs: function() {
+        if (stopped || !sdk.rooms) return;
+        unsubs.push(sdk.rooms.onState(function(st) {
+          if (stopped || !st || typeof st !== 'object') return;
+          stateCache = st;
+          var nextShared = {};
+          var seenPeerKeys = {};
+          Object.keys(st).forEach(function(k) {
+            if (k.indexOf(peerPrefix) === 0) {
+              var pid = k.slice(peerPrefix.length);
+              if (pid === myId) return;
+              var snap = st[k];
+              if (!snap || typeof snap !== 'object') return;
+              seenPeerKeys[pid] = true;
+              if (!peersById[pid]) {
+                peersById[pid] = Object.assign({ id: pid, _target: Object.assign({}, snap) }, snap);
+                if (typeof o.onJoin === 'function') { try { o.onJoin(peersById[pid]); } catch(e) {} }
+              } else {
+                peersById[pid]._target = Object.assign({}, snap);
+                Object.keys(snap).forEach(function(pk) {
+                  if (pk !== 'x' && pk !== 'y' && pk !== 'rot') peersById[pid][pk] = snap[pk];
+                });
+              }
+            } else {
+              nextShared[k] = st[k];
+            }
+          });
+          Object.keys(peersById).forEach(function(pid) {
+            if (!seenPeerKeys[pid]) {
+              var leftP = peersById[pid];
+              delete peersById[pid];
+              if (typeof o.onLeave === 'function') { try { o.onLeave(leftP); } catch(e) {} }
+            }
+          });
+          ns.sharedState = nextShared;
+          if (typeof o.onState === 'function') { try { o.onState(nextShared); } catch(e) {} }
+        }));
+        if (typeof sdk.rooms.onEvent === 'function') {
+          unsubs.push(sdk.rooms.onEvent(function(ev) {
+            if (stopped || !ev) return;
+            if (ev.payload && ev.payload._fromNetId === myId && !o.includeSelf) return;
+            var arr = listeners[ev.event];
+            if (arr) arr.forEach(function(fn) { try { fn(ev.payload, ev.from, ev); } catch(e) { handleHookError(e); } });
+            if (typeof o.onEvent === 'function') { try { o.onEvent(ev.event, ev.payload, ev.from, ev); } catch(e) { handleHookError(e); } }
+          }));
+        }
+      },
+      connect: function(roomTarget) {
+        if (!sdk.rooms || typeof sdk.rooms.list !== 'function') return Promise.resolve(null);
+        var desiredName = String(roomTarget || o.roomName || 'Lobby');
+        return sdk.rooms.list().then(function(list) {
+          var arr = Array.isArray(list) ? list : [];
+          var found = arr.find(function(r) { return r && (r.id === desiredName || r.name === desiredName) && r.playerCount < (r.maxPlayers || 8); });
+          if (found) {
+            return sdk.rooms.join(found.id).then(function(rm) {
+              ns.connected = true; ns.roomId = rm.id || found.id; ns.isHost = false; ns._attachSubs(); return rm;
+            });
+          }
+          return sdk.rooms.create({ name: desiredName, maxPlayers: Number(o.maxPlayers) || 8, state: {} }).then(function(rm) {
+            ns.connected = true; ns.roomId = rm.id || ''; ns.isHost = true; ns._attachSubs(); return rm;
+          });
+        }).catch(function(err) {
+          emitConsole('warn', 'netSync connect: ' + (err && err.message ? err.message : String(err)));
+          return null;
+        });
+      },
+      _tick: function(dt) {
+        if (stopped) return;
+        var alpha = Math.min(1, 1 - Math.exp(-interpSpd * dt));
+        Object.keys(peersById).forEach(function(pid) {
+          var p = peersById[pid];
+          var tg = p._target;
+          if (!tg) return;
+          if (tg.x !== undefined) p.x = (p.x !== undefined ? p.x : tg.x) + (Number(tg.x) - (p.x !== undefined ? p.x : tg.x)) * alpha;
+          if (tg.y !== undefined) p.y = (p.y !== undefined ? p.y : tg.y) + (Number(tg.y) - (p.y !== undefined ? p.y : tg.y)) * alpha;
+          if (tg.rot !== undefined) p.rot = (p.rot !== undefined ? p.rot : tg.rot) + (Number(tg.rot) - (p.rot !== undefined ? p.rot : tg.rot)) * alpha;
+        });
+        if (!ns.connected || !localEnt || !sdk.rooms || typeof sdk.rooms.setState !== 'function') return;
+        ns.sendAcc += dt;
+        if (ns.sendAcc >= 1 / sendRate) {
+          ns.sendAcc = 0;
+          var snap = { name: me.username || myId, ts: Date.now() };
+          for (var i = 0; i < props.length; i++) {
+            var pk = props[i];
+            if (localEnt[pk] !== undefined) {
+              snap[pk] = typeof localEnt[pk] === 'number' ? Math.round(localEnt[pk] * 100) / 100 : localEnt[pk];
+            }
+          }
+          var checkObj = Object.assign({}, snap); delete checkObj.ts;
+          var sig = JSON.stringify(checkObj);
+          if (sig !== ns.lastSentJson) {
+            ns.lastSentJson = sig;
+            var patch = {};
+            patch[peerPrefix + myId] = snap;
+            sdk.rooms.setState(patch).catch(function(){});
+          }
+        }
+      }
+    };
+    activeNetSyncs.push(ns);
+    if (o.autoJoin !== false) ns.connect(typeof o.autoJoin === 'string' ? o.autoJoin : o.roomName);
+    return ns;
+  }
+
+  function updateNetSyncs(dt) {
+    for (var i = 0; i < activeNetSyncs.length; i++) {
+      activeNetSyncs[i]._tick(dt);
+    }
+  }
+
   // --- Hybrid WebGL2 Post-FX Pipeline (+ Shockwaves, 1/4-res 2-Pass Bloom & Custom Shaders) ---
   var fxState = { enabled: false, bloom: 0, vignette: 0, chromatic: 0, wave: 0, blur: 0, contrast: 1, saturation: 1, crt: 0, customGlsl: '', customUniforms: {} };
   var glCanvas = null, gl = null, glLost = false, glRes = null;
@@ -5239,6 +6251,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     setShader: setShader,
     shockwave: shockwave,
     weather: weather,
+    waterZone: waterZone,
     ambientLight: ambientLight,
     light: light,
     shadowLight: shadowLight,
@@ -5253,6 +6266,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     },
     resetShadow: function() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; },
     drawTrail: drawTrail,
+    ropeChain: ropeChain,
+    limbIK: limbIK,
     debug: function(flag) {
       debugOverlay = flag === undefined ? !debugOverlay : !!flag;
       return debugOverlay;
@@ -5271,6 +6286,13 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     RoySDK: sdk,
     world: sdk.world,
     rooms: sdk.rooms,
+    netSync: netSync,
+    dialogue: dialogue,
+    uiGrid: uiGrid,
+    tooltip: tooltip,
+    ghostRecord: ghostRecord,
+    ghostStop: ghostStop,
+    ghostPlay: ghostPlay,
     save: function(k, v) { return sdk.storage.set(k, v); },
     load: function(k, d) { return sdk.storage.get(k, d); },
     submitScore: function(sc, opts) { return sdk.leaderboard.submit(sc, opts || { mode: 'best' }); },
@@ -5458,6 +6480,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       return;
     }
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space',' '].indexOf(e.key) >= 0) e.preventDefault();
+    if (dialogueHandleKey(e)) return;
     if (!keysDown[e.code]) { keysJustPressed[e.code] = true; keysJustPressed[e.key.toLowerCase()] = true; }
     keysDown[e.code] = true; keysDown[e.key] = true; keysDown[e.key.toLowerCase()] = true;
     hooks.keydown.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(e.key)).catch(handleHookError); });
@@ -5479,7 +6502,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   canvas.addEventListener('mousedown', function(e) {
     var p = canvasCoords(e);
     mouse.x = p.x; mouse.y = p.y; mouse.rx = p.rx; mouse.ry = p.ry; mouse.wx = p.wx; mouse.wy = p.wy;
-    if (debugOverlay && e.button === 0 && debugSceneRects.length > 0) {
+    if (debugOverlay && e.button === 0) {
       for (var dsi = 0; dsi < debugSceneRects.length; dsi++) {
         var sr = debugSceneRects[dsi];
         if (p.x >= sr.x && p.x <= sr.x + sr.w && p.y >= sr.y && p.y <= sr.y + sr.h) {
@@ -5487,7 +6510,20 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
           return;
         }
       }
+      for (var dgi = 0; dgi < debugGhostRects.length; dgi++) {
+        var gr = debugGhostRects[dgi];
+        if (p.x >= gr.x && p.x <= gr.x + gr.w && p.y >= gr.y && p.y <= gr.y + gr.h) {
+          if (gr.act === 'rec') {
+            if (ghostRec.active) { ghostStop(); showToast('Призрак записан (' + (f3GhostClip ? f3GhostClip.frames.length : 0) + ' кадр.)', '#34d399', 1600); }
+            else { ghostRecord(cam.followTarget || worldEntities[0]); showToast('Запись призрака...', '#f87171', 1200); }
+          } else if (gr.act === 'play' && f3GhostClip) {
+            ghostPlay(f3GhostClip, { color: '#38bdf8', alpha: 0.45 });
+          }
+          return;
+        }
+      }
     }
+    if (e.button === 0 && dialogueHandleClick(p.x, p.y)) return;
     if (e.button === 2) { mouse.rightDown = true; mouse.rightClicked = true; }
     else if (e.button === 1) { mouse.middleDown = true; }
     else { mouse.down = true; mouse.clicked = true; }
@@ -5543,6 +6579,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   function renderDebugOverlay() {
     debugSceneRects.length = 0;
+    debugGhostRects.length = 0;
     if (!debugOverlay) return;
     // Hitboxes in world space
     rootCtx.save();
@@ -5573,14 +6610,14 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
     rootCtx.restore();
 
-    // Screen-space telemetry + scene switcher HUD (top-right)
+    // Screen-space telemetry + phase profiler + ghost controls + scene switcher HUD (top-right)
     rootCtx.save();
     rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    var pw = 232;
+    var pw = 256;
     var scenesList = registeredScenes.length ? registeredScenes : [currentScene];
-    var ph = 112 + scenesList.length * 22;
+    var ph = 186 + scenesList.length * 22;
     var px = W - pw - 10, py = 10;
-    rootCtx.fillStyle = 'rgba(2, 6, 23, 0.86)';
+    rootCtx.fillStyle = 'rgba(2, 6, 23, 0.88)';
     rootCtx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
     rootCtx.lineWidth = 1;
     if (rootCtx.roundRect) { rootCtx.beginPath(); rootCtx.roundRect(px, py, pw, ph, 8); rootCtx.fill(); rootCtx.stroke(); }
@@ -5590,22 +6627,69 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     rootCtx.textBaseline = 'top';
     rootCtx.textAlign = 'left';
     rootCtx.fillStyle = '#38bdf8';
-    rootCtx.fillText('ROY DEBUG [F3]', px + 10, py + 8);
+    rootCtx.fillText('ROY DEBUG [F3] · v6.1', px + 10, py + 8);
     rootCtx.font = '500 11px monospace';
     rootCtx.fillStyle = '#e2e8f0';
     var loopPct = Math.min(100, Math.round((lastLoopTicks / 1000000) * 100));
-    rootCtx.fillText('FPS: ' + currentFps + '   Scale: ' + gameplayTimeScale.toFixed(2) + 'x', px + 10, py + 26);
-    rootCtx.fillText('Entities: ' + worldEntities.length + '   Particles: ' + pCount, px + 10, py + 42);
+    rootCtx.fillText('FPS: ' + currentFps + '   Scale: ' + gameplayTimeScale.toFixed(2) + 'x', px + 10, py + 25);
+    rootCtx.fillText('Entities: ' + worldEntities.length + '   Particles: ' + pCount, px + 10, py + 41);
     rootCtx.fillStyle = loopPct > 70 ? '#f87171' : '#94a3b8';
-    rootCtx.fillText('LoopTicks: ' + loopPct + '% (' + lastLoopTicks + ')', px + 10, py + 58);
-    rootCtx.fillStyle = fxState.enabled ? (glLost ? '#fbbf24' : '#34d399') : '#94a3b8';
-    rootCtx.fillText('PostFX: ' + (fxState.enabled ? (glLost ? '2D Fallback' : 'WebGL2 ON') : 'OFF'), px + 10, py + 74);
+    rootCtx.fillText('LoopTicks: ' + loopPct + '%   PostFX: ' + (fxState.enabled ? (glLost ? '2D' : 'WebGL2') : 'OFF'), px + 10, py + 57);
+
+    // Phase Profiler Breakdown
+    var pTot = Math.max(0.1, profStats.update + profStats.draw + profStats.light + profStats.postfx + profStats.ui);
+    rootCtx.fillStyle = '#cbd5e1';
+    rootCtx.fillText('Frame: ' + profStats.total.toFixed(1) + 'ms (CPU ' + pTot.toFixed(1) + 'ms)', px + 10, py + 75);
+    var barW = pw - 20, bxBar = px + 10, byBar = py + 91;
+    var phases = [
+      { v: profStats.update, c: '#38bdf8', lbl: 'U' },
+      { v: profStats.draw, c: '#34d399', lbl: 'D' },
+      { v: profStats.light, c: '#fbbf24', lbl: 'L' },
+      { v: profStats.postfx, c: '#c084fc', lbl: 'FX' },
+      { v: profStats.ui, c: '#f472b6', lbl: 'UI' }
+    ];
+    rootCtx.fillStyle = '#0f172a';
+    rootCtx.fillRect(bxBar, byBar, barW, 8);
+    var curX = bxBar;
+    for (var pi = 0; pi < phases.length; pi++) {
+      var segW = Math.max(0, (phases[pi].v / pTot) * barW);
+      if (segW > 0.4) {
+        rootCtx.fillStyle = phases[pi].c;
+        rootCtx.fillRect(curX, byBar, segW, 8);
+        curX += segW;
+      }
+    }
+    rootCtx.font = '500 9.5px monospace';
     rootCtx.fillStyle = '#94a3b8';
-    rootCtx.fillText('Scenes (' + currentScene + '):', px + 10, py + 92);
+    rootCtx.fillText('U:' + profStats.update.toFixed(1) + ' D:' + profStats.draw.toFixed(1) + ' L:' + profStats.light.toFixed(1) + ' FX:' + profStats.postfx.toFixed(1) + ' UI:' + profStats.ui.toFixed(1), px + 10, py + 103);
+
+    // Ghost quick buttons
+    var gBtnY = py + 121, gBtnW = (pw - 26) / 2;
+    rootCtx.font = '700 10px monospace';
+    rootCtx.fillStyle = ghostRec.active ? 'rgba(239,68,68,0.35)' : 'rgba(30,41,59,0.85)';
+    rootCtx.strokeStyle = ghostRec.active ? '#f87171' : 'rgba(148,163,184,0.4)';
+    rootCtx.fillRect(px + 10, gBtnY, gBtnW, 20);
+    rootCtx.strokeRect(px + 10, gBtnY, gBtnW, 20);
+    rootCtx.fillStyle = ghostRec.active ? '#fecaca' : '#e2e8f0';
+    rootCtx.fillText(ghostRec.active ? '⏹ STOP REC' : '● REC GHOST', px + 16, gBtnY + 5);
+    debugGhostRects.push({ act: 'rec', x: px + 10, y: gBtnY, w: gBtnW, h: 20 });
+
+    var gPlayX = px + 16 + gBtnW;
+    rootCtx.fillStyle = f3GhostClip ? 'rgba(56,189,248,0.22)' : 'rgba(15,23,42,0.6)';
+    rootCtx.strokeStyle = f3GhostClip ? '#38bdf8' : 'rgba(148,163,184,0.25)';
+    rootCtx.fillRect(gPlayX, gBtnY, gBtnW, 20);
+    rootCtx.strokeRect(gPlayX, gBtnY, gBtnW, 20);
+    rootCtx.fillStyle = f3GhostClip ? '#7dd3fc' : '#64748b';
+    rootCtx.fillText('▶ PLAY (' + (f3GhostClip ? f3GhostClip.frames.length : 0) + ')', gPlayX + 6, gBtnY + 5);
+    debugGhostRects.push({ act: 'play', x: gPlayX, y: gBtnY, w: gBtnW, h: 20 });
+
+    rootCtx.font = '500 11px monospace';
+    rootCtx.fillStyle = '#94a3b8';
+    rootCtx.fillText('Scenes (' + currentScene + ', depth ' + sceneStack.length + '):', px + 10, py + 150);
 
     for (var si = 0; si < scenesList.length; si++) {
       var scName = scenesList[si];
-      var by = py + 110 + si * 22;
+      var by = py + 168 + si * 22;
       var bx = px + 10, bw = pw - 20, bh = 18;
       var isAct = scName === currentScene;
       rootCtx.fillStyle = isAct ? 'rgba(56,189,248,0.28)' : 'rgba(30,41,59,0.75)';
@@ -5631,6 +6715,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var fpsFrames = 0, fpsAcc = 0;
 
   function frameLoop(now) {
+    var tFrameStart = performance.now();
     var rawDt = Math.min(0.05, Math.max(0.001, (now - lastTs) / 1000));
     lastTs = now;
     fpsFrames++; fpsAcc += rawDt;
@@ -5645,7 +6730,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
           scene: currentScene,
           entities: worldEntities.length,
           particles: pCount,
-          loopPct: Math.min(100, Math.round((lastLoopTicks / 1000000) * 100))
+          loopPct: Math.min(100, Math.round((lastLoopTicks / 1000000) * 100)),
+          frameMs: Math.round(profStats.total * 10) / 10
         }, '*');
       } catch(e) {}
     }
@@ -5671,6 +6757,22 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     lastLoopTicks = __rt._loopTicks;
     __rt._loopTicks = 0;
 
+    if (dialogueState.active) {
+      dialogueState.drawnThisFrame = false;
+      dialogueState.cooldown = Math.max(0, dialogueState.cooldown - rawDt);
+      if (dialogueState.shownChars < dialogueState.fullText.length) {
+        var prevWhole = Math.floor(dialogueState.shownChars);
+        dialogueState.shownChars = Math.min(dialogueState.fullText.length, dialogueState.shownChars + dialogueState.speed * rawDt);
+        var nextWhole = Math.floor(dialogueState.shownChars);
+        dialogueState.audioAcc += rawDt;
+        if (nextWhole > prevWhole && dialogueState.audioAcc >= 0.055 && !audioMuted && !tabMuted && audioCtx && audioCtx.state === 'running') {
+          dialogueState.audioAcc = 0;
+          tone(520 + (nextWhole % 3) * 45, 22, 'triangle', 0.025);
+        }
+      }
+    }
+
+    var tUpd0 = performance.now();
     if (!frozen && dt > 0) {
       gameTime += dt;
       sceneTime += dt;
@@ -5743,6 +6845,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       for (var ui = 0; ui < hooks.update.length; ui++) {
         Promise.resolve(hooks.update[ui](dt)).catch(handleHookError);
       }
+      updateNetSyncs(dt);
+      updateAndDrawGhosts(dt, false);
       for (var er = worldEntities.length - 1; er >= 0; er--) {
         if (!worldEntities[er] || worldEntities[er].alive === false) worldEntities.splice(er, 1);
       }
@@ -5774,6 +6878,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         pi++;
       }
     }
+    var msUpd = performance.now() - tUpd0;
+    profStats.update = profStats.update * 0.85 + msUpd * 0.15;
 
     if (cam.followTarget) {
       var tx = (cam.followTarget.x || 0) - W / 2;
@@ -5807,6 +6913,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     mouse.rx = mouse.wx; mouse.ry = mouse.wy;
 
     // 1. World Render Phase -> worldCanvas
+    var tDraw0 = performance.now();
     frameBaseCtx = worldCtx;
     ctx = worldCtx;
     ctx.save();
@@ -5834,6 +6941,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     if (!entitiesDrawnThisFrame && worldEntities.length > 0) {
       drawEntitiesNow();
     }
+    updateAndDrawGhosts(dt, true);
     inDraw = false;
     ctx = worldCtx;
     if (sceneStack.length === 0) updateAndDrawWeather((!frozen && dt > 0) ? dt : 0);
@@ -5857,11 +6965,17 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
     ctx.restore();
+    var msDraw = performance.now() - tDraw0;
+    profStats.draw = profStats.draw * 0.85 + msDraw * 0.15;
 
     // 2. Half-Res 2D Lighting Multiply Pass on worldCanvas
+    var tLight0 = performance.now();
     renderLightOverlayToWorld(shakeOx, shakeOy);
+    var msLight = performance.now() - tLight0;
+    profStats.light = profStats.light * 0.85 + msLight * 0.15;
 
     // 3. Composite World (and Frozen Scene Stack Underlays + WebGL2 Post-FX) to rootCtx
+    var tFx0 = performance.now();
     frameBaseCtx = rootCtx;
     ctx = rootCtx;
     rootCtx.save();
@@ -5891,8 +7005,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       rootCtx.drawImage(worldCanvas, 0, 0, canvas.width, canvas.height);
     }
     rootCtx.restore();
+    var msFx = performance.now() - tFx0;
+    profStats.postfx = profStats.postfx * 0.85 + msFx * 0.15;
 
     // 4. Razor-sharp Screen UI & HUD Phase on rootCtx (bypasses Post-FX)
+    var tUi0 = performance.now();
     if (hooks.drawUi.length > 0) {
       ctx = rootCtx;
       ctx.save();
@@ -5905,6 +7022,9 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       ctx = rootCtx;
       ctx.restore();
     }
+
+    renderDialogueOverlay(false);
+    renderQueuedTooltips();
 
     // Очередь встроенных тост-уведомлений
     if (toastQueue.length > 0) {
@@ -5967,8 +7087,12 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       }
       rootCtx.restore();
     }
+    var msUi = performance.now() - tUi0;
+    profStats.ui = profStats.ui * 0.85 + msUi * 0.15;
 
     renderDebugOverlay();
+    var msTot = performance.now() - tFrameStart;
+    profStats.total = profStats.total * 0.85 + msTot * 0.15;
 
     keysJustPressed = {};
     mouse.clicked = false;
@@ -5989,6 +7113,10 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     });
     return chain;
   }).then(function() {
+    if (INITIAL_START_SCENE && INITIAL_START_SCENE !== 'main') {
+      regSceneName(INITIAL_START_SCENE);
+      applySceneSwitchNow(INITIAL_START_SCENE, null);
+    }
     lastTs = performance.now();
     requestAnimationFrame(frameLoop);
   }).catch(function(err) {
