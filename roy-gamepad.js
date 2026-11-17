@@ -20,10 +20,26 @@ const KEY_DEFS = {
 export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onVisibilityChange }) {
   let active = false;
   let useWasd = false;
+  let useStick = false;
   let extraButtons = []; // [{ label, code }]
   const activePointers = new Map(); // pointerId -> mappedKeyCode
   const keyHoldCounts = new Map(); // mappedKeyCode -> count
+  let stickPointerId = null;
+  const stickHeldDirs = { left: false, right: false, up: false, down: false };
   const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  function dispatchVirtualAxis(x, y, isActive) {
+    const iframe = typeof getIframeEl === 'function' ? getIframeEl() : null;
+    if (!iframe || !iframe.contentWindow) return;
+    try {
+      iframe.contentWindow.postMessage({
+        type: 'roy-virtual-axis',
+        x: Math.max(-1, Math.min(1, Number(x) || 0)),
+        y: Math.max(-1, Math.min(1, Number(y) || 0)),
+        active: !!isActive
+      }, '*');
+    } catch (_) {}
+  }
 
   function dispatchVirtualKey(codeName, pressed) {
     const def = KEY_DEFS[codeName];
@@ -57,7 +73,27 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
     }
   }
 
+  function releaseStick(overlay) {
+    stickPointerId = null;
+    ['left', 'right', 'up', 'down'].forEach((dir) => {
+      if (stickHeldDirs[dir]) {
+        stickHeldDirs[dir] = false;
+        const code = resolveDirCode(dir);
+        if (code) setLogicalPressed(code, false);
+      }
+    });
+    dispatchVirtualAxis(0, 0, false);
+    const ov = overlay || (typeof getOverlayEl === 'function' ? getOverlayEl() : null);
+    if (ov) {
+      const knob = ov.querySelector('.roy-stick-knob');
+      if (knob) knob.style.transform = 'translate(-50%, -50%)';
+      const base = ov.querySelector('.roy-stick-base');
+      if (base) base.classList.remove('active');
+    }
+  }
+
   function releaseAll() {
+    releaseStick();
     Array.from(keyHoldCounts.keys()).forEach((code) => {
       dispatchVirtualKey(code, false);
     });
@@ -80,6 +116,45 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
     return null;
   }
 
+  function updateStickFromPointer(stickEl, clientX, clientY) {
+    if (!stickEl) return;
+    const rect = stickEl.getBoundingClientRect();
+    const cx = rect.left + rect.width * 0.5;
+    const cy = rect.top + rect.height * 0.5;
+    const maxR = Math.max(18, rect.width * 0.42);
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxR && dist > 0) {
+      const s = maxR / dist;
+      dx *= s;
+      dy *= s;
+    }
+    const nx = dx / maxR;
+    const ny = dy / maxR;
+    const knob = stickEl.querySelector('.roy-stick-knob');
+    if (knob) {
+      knob.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-50% + ${dy.toFixed(1)}px))`;
+    }
+    stickEl.classList.add('active');
+    dispatchVirtualAxis(nx, ny, true);
+
+    const TH = 0.45;
+    const nextDirs = {
+      left: nx < -TH,
+      right: nx > TH,
+      up: ny < -TH,
+      down: ny > TH
+    };
+    ['left', 'right', 'up', 'down'].forEach((dir) => {
+      if (nextDirs[dir] !== stickHeldDirs[dir]) {
+        stickHeldDirs[dir] = nextDirs[dir];
+        const code = resolveDirCode(dir);
+        if (code) setLogicalPressed(code, nextDirs[dir]);
+      }
+    });
+  }
+
   function updateVisualStates(overlay) {
     if (!overlay) return;
     overlay.querySelectorAll('[data-pad-dir]').forEach(btn => {
@@ -94,6 +169,9 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
     overlay._royPadBound = true;
 
     const handleReleasePointer = (pointerId) => {
+      if (stickPointerId === pointerId) {
+        releaseStick(overlay);
+      }
       const prevCode = activePointers.get(pointerId);
       if (prevCode) {
         activePointers.delete(pointerId);
@@ -110,6 +188,15 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
         releaseAll();
         useWasd = !useWasd;
         modeBtn.textContent = useWasd ? 'WASD' : 'Стрелки';
+        return;
+      }
+      const stickEl = e.target.closest('[data-pad-stick]');
+      if (stickEl) {
+        e.preventDefault();
+        e.stopPropagation();
+        stickPointerId = e.pointerId;
+        try { stickEl.setPointerCapture(e.pointerId); } catch (_) {}
+        updateStickFromPointer(stickEl, e.clientX, e.clientY);
         return;
       }
       const btn = e.target.closest('[data-pad-dir]');
@@ -129,6 +216,11 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
     });
 
     overlay.addEventListener('pointermove', (e) => {
+      if (stickPointerId === e.pointerId) {
+        const stickEl = overlay.querySelector('[data-pad-stick]');
+        if (stickEl) updateStickFromPointer(stickEl, e.clientX, e.clientY);
+        return;
+      }
       if (!activePointers.has(e.pointerId)) return;
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const btn = el ? el.closest('[data-pad-dir]') : null;
@@ -150,18 +242,26 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
   }
 
   function renderMarkup(overlay) {
+    const leftHtml = useStick
+      ? `<div class="roy-gamepad-cluster roy-gamepad-stick">
+           <div class="roy-stick-base" data-pad-stick="1" aria-label="Аналоговый стик">
+             <div class="roy-stick-knob"></div>
+           </div>
+         </div>`
+      : `<div class="roy-gamepad-cluster roy-gamepad-dpad">
+           <div></div>
+           <button type="button" class="roy-pad-btn" data-pad-dir="up" aria-label="Вверх"><i class="fa-solid fa-caret-up"></i></button>
+           <div></div>
+           <button type="button" class="roy-pad-btn" data-pad-dir="left" aria-label="Влево"><i class="fa-solid fa-caret-left"></i></button>
+           <div class="roy-pad-center"></div>
+           <button type="button" class="roy-pad-btn" data-pad-dir="right" aria-label="Вправо"><i class="fa-solid fa-caret-right"></i></button>
+           <div></div>
+           <button type="button" class="roy-pad-btn" data-pad-dir="down" aria-label="Вниз"><i class="fa-solid fa-caret-down"></i></button>
+           <div></div>
+         </div>`;
+
     overlay.innerHTML = `
-      <div class="roy-gamepad-cluster roy-gamepad-dpad">
-        <div></div>
-        <button type="button" class="roy-pad-btn" data-pad-dir="up" aria-label="Вверх"><i class="fa-solid fa-caret-up"></i></button>
-        <div></div>
-        <button type="button" class="roy-pad-btn" data-pad-dir="left" aria-label="Влево"><i class="fa-solid fa-caret-left"></i></button>
-        <div class="roy-pad-center"></div>
-        <button type="button" class="roy-pad-btn" data-pad-dir="right" aria-label="Вправо"><i class="fa-solid fa-caret-right"></i></button>
-        <div></div>
-        <button type="button" class="roy-pad-btn" data-pad-dir="down" aria-label="Вниз"><i class="fa-solid fa-caret-down"></i></button>
-        <div></div>
-      </div>
+      ${leftHtml}
       <div class="roy-gamepad-cluster roy-gamepad-actions">
         <button type="button" class="roy-pad-mode-pill" data-pad-mode-toggle title="Переключить Стрелки / WASD">${useWasd ? 'WASD' : 'Стрелки'}</button>
         ${extraButtons.length > 0 ? `<div style="display:flex; gap:8px; justify-content:flex-end;">${extraButtons.map(b => `<button type="button" class="roy-pad-btn roy-pad-action" style="width:42px;height:42px;font-size:12px;" data-pad-dir="extra:${esc(b.code)}" aria-label="${esc(b.code)}">${esc(b.label)}</button>`).join('')}</div>` : ''}
@@ -177,6 +277,7 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
   function setConfig(cfg) {
     if (!cfg || typeof cfg !== 'object') return;
     if (typeof cfg.wasd === 'boolean') useWasd = cfg.wasd;
+    if (typeof cfg.stick === 'boolean') useStick = cfg.stick;
     if (Array.isArray(cfg.extras)) {
       extraButtons = cfg.extras.slice(0, 3).map(item => {
         if (typeof item === 'string') {
@@ -199,6 +300,7 @@ export function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onV
   function resetConfig() {
     releaseAll();
     useWasd = false;
+    useStick = false;
     extraButtons = [];
     const overlay = typeof getOverlayEl === 'function' ? getOverlayEl() : null;
     if (overlay) {

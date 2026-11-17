@@ -399,7 +399,7 @@ export const RoyLang = (function() {
         const kw = expect('KW', 'export');
         const nt = peek();
         let inner = null;
-        if (nt.type === 'KW' && nt.value === 'fn') inner = parseFnDecl();
+        if ((nt.type === 'KW' && nt.value === 'fn') || (nt.type === 'IDENT' && nt.value === 'function')) inner = parseFnDecl();
         else if (nt.type === 'KW' && (nt.value === 'entity' || nt.value === 'class')) inner = parseEntityDecl();
         else if (nt.type === 'KW' && nt.value === 'enum') inner = parseEnumDecl();
         else if (nt.type === 'KW' && (nt.value === 'var' || nt.value === 'let' || nt.value === 'const')) inner = parseVarDecl();
@@ -507,6 +507,9 @@ export const RoyLang = (function() {
           if (t.value === 'continue') { pos++; match('PUNC', ';'); return { type: 'Continue', line: t.line, col: t.col }; }
         }
 
+        if (t.type === 'IDENT' && t.value === 'function' && peek(1).type === 'IDENT') {
+          return parseFnDecl();
+        }
         if (isVal('PUNC', '{')) return parseBlock();
 
         const expr = parseExpression();
@@ -561,7 +564,10 @@ export const RoyLang = (function() {
       }
 
       function parseFnDecl() {
-        const kw = expect('KW', 'fn');
+        let kw = null;
+        if (isVal('KW', 'fn')) kw = expect('KW', 'fn');
+        else if (isVal('IDENT', 'function')) { pos++; kw = prev(); }
+        else kw = expect('KW', 'fn');
         const nameTok = expect('IDENT', undefined, 'Ожидалось имя функции');
         const params = parseParamDefs(true);
         let body = null;
@@ -572,7 +578,7 @@ export const RoyLang = (function() {
         } else {
           body = parseBlock();
         }
-        return { type: 'FnDecl', name: nameTok.value, params, body, line: kw.line, col: kw.col };
+        return { type: 'FnDecl', name: nameTok.value, params, body, usedJsFunction: kw.value === 'function', line: kw.line, col: kw.col };
       }
 
       function parseEntityDecl() {
@@ -592,7 +598,7 @@ export const RoyLang = (function() {
           while (match('PUNC', ';') || match('PUNC', ',')) {}
           if (isVal('PUNC', '}')) break;
           const nt = peek();
-          if (isVal('KW', 'fn')) {
+          if (isVal('KW', 'fn') || (isVal('IDENT', 'function') && peek(1).type === 'IDENT')) {
             const m = parseFnDecl();
             if (m.name === 'init') initMethod = m;
             else methods.push(m);
@@ -1066,6 +1072,17 @@ export const RoyLang = (function() {
           }
         }
         if (t.type === 'IDENT') {
+          if (t.value === 'function' && peek(1).type === 'PUNC' && peek(1).value === '(') {
+            pos++;
+            const params = parseParamDefs(true);
+            let body = null;
+            if (match('OP', '=>')) {
+              body = parseArrowBody();
+            } else {
+              body = parseBlock();
+            }
+            return { type: 'FnExpr', params, body, usedJsFunction: true, line: t.line, col: t.col };
+          }
           if (peek(1).type === 'OP' && peek(1).value === '=>') {
             pos += 2;
             const body = parseArrowBody();
@@ -1273,31 +1290,197 @@ export const RoyLang = (function() {
       return ASYNC_ROOTS.has(name) || ASYNC_MEMBERS.has(name) || asyncFnNames.has(name);
     }
 
+    const KNOWN_RUNTIME_GLOBALS = new Set([
+      'BaseEntity', 'spawn', 'entities', 'destroyAll', 'drawEntities', 'on', 'every', 'after', 'wait',
+      'loadImage', 'loadSound', 'loadJson', 'tilemap', 'moveAndCollide', 'raycast', 'bounceCircle', 'spatialQuery',
+      'button', 'panel', 'scrollBegin', 'scrollEnd', 'slider', 'toggle', 'pathfind',
+      'drawGradient', 'drawRadialGradient', 'layer', 'beginScreen', 'beginWorld', 'zoomAt',
+      'pushMatrix', 'popMatrix', 'translate', 'rotate', 'scale', 'clip', 'unclip', 'consumeClick', 'setCursor',
+      'setGamepad', 'vibrate', 'freezeFrame', 'hitStop', 'flashScreen', 'timeScale',
+      'fx', 'setShader', 'ambientLight', 'light', 'shadowLight', 'shadowCasters',
+      'setBlend', 'setShadow', 'resetShadow', 'drawTrail', 'debug',
+      'scene', 'goto', 'tween', 'vec', 'sprite', 'game', 'mouse', 'touches', 'player', 'RoySDK', 'world', 'rooms',
+      'save', 'load', 'submitScore', 'topScores', 'toast', 'openDonate', 'setBadge', 'cls', 'clear',
+      'rect', 'circle', 'drawObj', 'drawRect', 'strokeRect', 'drawCircle', 'strokeCircle',
+      'drawArc', 'drawRing', 'drawEllipse', 'drawLine', 'drawPoly', 'drawPath', 'drawCurve', 'drawBezier',
+      'drawStar', 'drawBar', 'drawGrid', 'pixel', 'setFont', 'text', 'textStroke', 'textWrap', 'measureText',
+      'glow', 'resetGlow', 'alpha', 'blend', 'particles', 'emitParticles',
+      'camera', 'cameraFollow', 'cameraBounds', 'shake', 'key', 'keyPressed', 'axis',
+      'sfx', 'tone', 'playNote', 'melody', 'bgm', 'stopBgm', 'setMuted', 'isMuted', 'now',
+      'abs', 'min', 'max', 'clamp', 'lerp', 'wrap', 'sign', 'approach', 'range',
+      'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sqrt', 'pow', 'floor', 'ceil', 'round', 'roundTo',
+      'log10', 'exp', 'PI', 'TAU', 'noise2d', 'fbm', 'hsl', 'lerpColor',
+      'fmtNum', 'int', 'float', 'str', 'num', 'bool', 'rand', 'randInt', 'random', 'choose',
+      'len', 'push', 'pop', 'removeAt', 'map', 'filter', 'find', 'some', 'everyItem', 'reduce', 'sort', 'slice',
+      'reverse', 'contains', 'indexOf', 'flat', 'split', 'join', 'trim', 'upper', 'lower', 'replace', 'keys', 'values',
+      'dist', 'collides', 'print', 'log',
+      'Math', 'Date', 'JSON', 'Array', 'Object', 'Number', 'String', 'Boolean', 'Promise', 'RegExp', 'Map', 'Set',
+      'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'console', 'window', 'document'
+    ]);
+
+    function levenshteinDist(a, b) {
+      const m = a.length, n = b.length;
+      if (!m) return n;
+      if (!n) return m;
+      const dp = new Array(n + 1);
+      for (let j = 0; j <= n; j++) dp[j] = j;
+      for (let i = 1; i <= m; i++) {
+        let prev = dp[0];
+        dp[0] = i;
+        for (let j = 1; j <= n; j++) {
+          const tmp = dp[j];
+          dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+          prev = tmp;
+        }
+      }
+      return dp[n];
+    }
+
+    function suggestClosestSymbol(name, scopeSet) {
+      const target = String(name || '');
+      const lower = target.toLowerCase();
+      let best = '';
+      let bestScore = Infinity;
+      const checkSet = (s) => {
+        s.forEach(cand => {
+          if (!cand || cand === target || cand.length < 2) return;
+          const d = levenshteinDist(lower, cand.toLowerCase());
+          const maxAllow = Math.max(2, Math.floor(Math.max(target.length, cand.length) * 0.45));
+          if (d <= maxAllow && d < bestScore) {
+            bestScore = d;
+            best = cand;
+          }
+        });
+      };
+      checkSet(KNOWN_RUNTIME_GLOBALS);
+      if (scopeSet) checkSet(scopeSet);
+      return best;
+    }
+
+    function addPatternNames(pat, set) {
+      if (!pat) return;
+      if (pat.type === 'ArrayPat') (pat.elements || []).forEach(el => { if (el.name) set.add(el.name); });
+      else if (pat.type === 'ObjectPat') (pat.props || []).forEach(pr => { if (pr.alias) set.add(pr.alias); });
+    }
+
+    function addParamNames(params, set) {
+      (params || []).forEach(p => {
+        if (typeof p === 'string') set.add(p);
+        else if (p && p.pattern) addPatternNames(p.pattern, set);
+        else if (p && p.name) set.add(p.name);
+      });
+    }
+
+    function collectDeclaredInStmts(stmts, set) {
+      (stmts || []).forEach(s => {
+        if (!s) return;
+        if (s.type === 'VarDecl') {
+          if (s.name) set.add(s.name);
+          if (s.pattern) addPatternNames(s.pattern, set);
+        } else if (s.type === 'FnDecl' || s.type === 'ClassDecl' || s.type === 'EntityDecl' || s.type === 'EnumDecl') {
+          if (s.name) set.add(s.name);
+        } else if (s.type === 'ImportBinding') {
+          if (s.mode === 'namespace' && s.nsAlias) set.add(s.nsAlias);
+          else if (s.mode === 'named') (s.specifiers || []).forEach(sp => set.add(sp.alias));
+        }
+      });
+    }
+
     let curFile = ast.fileName || 'main.roy';
     const warnings = [];
-    function lintWalk(node, fName) {
+    const baseScope = new Set(KNOWN_RUNTIME_GLOBALS);
+    (assetManifest || []).forEach(a => baseScope.add(a.alias));
+    collectDeclaredInStmts(ast.body, baseScope);
+
+    function lintWalk(node, fName, scopeSet) {
       if (!node || typeof node !== 'object') return;
       if (node.type === 'ModuleScope') {
         const mf = node.fileName || fName;
-        (node.body || []).forEach(s => lintWalk(s, mf));
+        const modScope = new Set(KNOWN_RUNTIME_GLOBALS);
+        (assetManifest || []).forEach(a => modScope.add(a.alias));
+        collectDeclaredInStmts(node.body, modScope);
+        (node.body || []).forEach(s => lintWalk(s, mf, modScope));
+        return;
+      }
+      if (node.type === 'FnDecl' || node.type === 'FnExpr') {
+        if (node.usedJsFunction) {
+          warnings.push(`[${fName}:${node.line}] В RoyLang принято писать "fn" вместо "function" (работает как алиас)`);
+        }
+        const fnScope = new Set(scopeSet);
+        addParamNames(node.params, fnScope);
+        if (node.body && node.body.stmts) collectDeclaredInStmts(node.body.stmts, fnScope);
+        lintWalk(node.body, fName, fnScope);
+        return;
+      }
+      if (node.type === 'ClassDecl' || node.type === 'EntityDecl') {
+        const clsScope = new Set(scopeSet);
+        addParamNames(node.ctorParams, clsScope);
+        if (node.initMethod) lintWalk(node.initMethod, fName, clsScope);
+        (node.methods || []).forEach(m => lintWalk(m, fName, clsScope));
+        (node.fields || []).forEach(f => { if (f.init) lintWalk(f.init, fName, clsScope); });
+        return;
+      }
+      if (node.type === 'OnHook') {
+        const hookScope = new Set(scopeSet);
+        addParamNames(node.params, hookScope);
+        if (node.body && node.body.stmts) collectDeclaredInStmts(node.body.stmts, hookScope);
+        lintWalk(node.body, fName, hookScope);
+        return;
+      }
+      if (node.type === 'Block') {
+        const blkScope = new Set(scopeSet);
+        collectDeclaredInStmts(node.stmts, blkScope);
+        (node.stmts || []).forEach(s => lintWalk(s, fName, blkScope));
+        return;
+      }
+      if (node.type === 'ForRange' || node.type === 'ForEach') {
+        lintWalk(node.start, fName, scopeSet);
+        lintWalk(node.end, fName, scopeSet);
+        lintWalk(node.iterable, fName, scopeSet);
+        const loopScope = new Set(scopeSet);
+        if (node.varName) loopScope.add(node.varName);
+        if (node.body && node.body.stmts) collectDeclaredInStmts(node.body.stmts, loopScope);
+        lintWalk(node.body, fName, loopScope);
+        return;
+      }
+      if (node.type === 'ForEntries') {
+        lintWalk(node.iterable, fName, scopeSet);
+        const loopScope = new Set(scopeSet);
+        if (node.keyName) loopScope.add(node.keyName);
+        if (node.valName) loopScope.add(node.valName);
+        if (node.body && node.body.stmts) collectDeclaredInStmts(node.body.stmts, loopScope);
+        lintWalk(node.body, fName, loopScope);
         return;
       }
       if (node.type === 'Call') {
-        const cn = calleeChainName(node.callee);
-        if (cn === 'random' || cn === 'randomInt') {
-          warnings.push(`[${fName}:${node.line}] В RoyLang используй rand()/randInt() вместо ${cn}()`);
+        if (node.callee && node.callee.type === 'Ident') {
+          const cn = node.callee.name;
+          if (cn === 'random') {
+            warnings.push(`[${fName}:${node.line}] random() поддерживается для совместимости; стандартные функции RoyLang — rand() и randInt()`);
+          } else if (cn === 'randomInt') {
+            warnings.push(`[${fName}:${node.line}] Неизвестная функция "randomInt". Возможно, имелось в виду "randInt"?`);
+          } else if (!scopeSet.has(cn)) {
+            const sug = suggestClosestSymbol(cn, scopeSet);
+            warnings.push(`[${fName}:${node.line}] Неизвестная функция "${cn}"${sug ? `. Возможно, имелось в виду "${sug}"?` : ''}`);
+          }
         }
-        if (cn === 'textStroke' && node.args && node.args[3] && node.args[3].type === 'Literal' && typeof node.args[3].value === 'number') {
-          warnings.push(`[${fName}:${node.line}] В textStroke 4-й аргумент — цвет текста, а size идёт 6-м`);
+        if (calleeChainName(node.callee) === 'textStroke' && node.args && node.args[3] && node.args[3].type === 'Literal' && typeof node.args[3].value === 'number') {
+          warnings.push(`[${fName}:${node.line}] В textStroke 4-й аргумент — цвет текста (или объект { color, stroke, size }), а size идёт 6-м`);
+        }
+      } else if ((node.type === 'NewExpr' || node.type === 'SpawnExpr') && node.ctorExpr && node.ctorExpr.type === 'Ident') {
+        const cn = node.ctorExpr.name;
+        if (!scopeSet.has(cn)) {
+          const sug = suggestClosestSymbol(cn, scopeSet);
+          warnings.push(`[${fName}:${node.line}] Неизвестный класс/сущность "${cn}"${sug ? `. Возможно, имелось в виду "${sug}"?` : ''}`);
         }
       }
       for (const k of Object.keys(node)) {
         const v = node[k];
-        if (Array.isArray(v)) v.forEach(item => lintWalk(item, fName));
-        else if (v && typeof v === 'object' && v.type) lintWalk(v, fName);
+        if (Array.isArray(v)) v.forEach(item => lintWalk(item, fName, scopeSet));
+        else if (v && typeof v === 'object' && v.type) lintWalk(v, fName, scopeSet);
       }
     }
-    lintWalk(ast, curFile);
+    lintWalk(ast, curFile, baseScope);
 
     let seq = 0;
     const nextTmp = (p) => `__roy_${p}_${++seq}`;
@@ -1508,11 +1691,12 @@ export const RoyLang = (function() {
           const evKey = (normEv === 'enter' || normEv === 'exit') && node.sceneFilter
             ? `${normEv}:${node.sceneFilter}`
             : normEv;
+          const regSceneCall = node.sceneFilter ? `__rt._regScene(${JSON.stringify(node.sceneFilter)}); ` : '';
           const filterGuard = (node.sceneFilter && normEv !== 'enter' && normEv !== 'exit')
             ? `if (__rt.scene.name !== ${JSON.stringify(node.sceneFilter)}) return;\n`
             : '';
           const bodyJs = `{\n${filterGuard}${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')}\n}`;
-          return `__rt.on(${JSON.stringify(evKey)}, ${isAsync ? 'async ' : ''}function(${emitParams(node.params)}) ${bodyJs});`;
+          return `${regSceneCall}__rt.on(${JSON.stringify(evKey)}, ${isAsync ? 'async ' : ''}function(${emitParams(node.params)}) ${bodyJs});`;
         }
         case 'AfterHook': {
           const isAsync = astHasAwait(node.body);
@@ -1532,24 +1716,24 @@ export const RoyLang = (function() {
         case 'MatchStmt':
           return emitMatchBody(node, false);
         case 'While':
-          return `while (${emitExpr(node.cond)}) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} }`;
+          return `while (${emitExpr(node.cond)}) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} }`;
         case 'ForRange': {
           const eVar = nextTmp('end');
           const cmp = node.inclusive ? '<=' : '<';
-          return `{ const ${eVar} = ${emitExpr(node.end)}; for (let ${node.varName} = ${emitExpr(node.start)}; ${node.varName} ${cmp} ${eVar}; ${node.varName}++) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${eVar} = ${emitExpr(node.end)}; for (let ${node.varName} = ${emitExpr(node.start)}; ${node.varName} ${cmp} ${eVar}; ${node.varName}++) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'ForEach': {
           const colVar = nextTmp('col');
-          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterList = Array.isArray(${colVar}) ? ${colVar} : (${colVar} && typeof ${colVar} === 'object' ? Object.keys(${colVar}) : []); for (const ${node.varName} of __iterList) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterList = Array.isArray(${colVar}) ? ${colVar} : (${colVar} && typeof ${colVar} === 'object' ? Object.keys(${colVar}) : []); for (const ${node.varName} of __iterList) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'ForEntries': {
           const colVar = nextTmp('col');
-          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterEnt = Array.isArray(${colVar}) ? ${colVar}.map((__v, __i) => [__i, __v]) : (${colVar} && typeof ${colVar} === 'object' ? Object.entries(${colVar}) : []); for (const [${node.keyName}, ${node.valName}] of __iterEnt) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${colVar} = ${emitExpr(node.iterable)}; const __iterEnt = Array.isArray(${colVar}) ? ${colVar}.map((__v, __i) => [__i, __v]) : (${colVar} && typeof ${colVar} === 'object' ? Object.entries(${colVar}) : []); for (const [${node.keyName}, ${node.valName}] of __iterEnt) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'Repeat': {
           const cntVar = nextTmp('rep');
           const idxVar = nextTmp('i');
-          return `{ const ${cntVar} = Math.max(0, Math.floor(${emitExpr(node.countExpr)})); for (let ${idxVar} = 0; ${idxVar} < ${cntVar}; ${idxVar}++) { __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
+          return `{ const ${cntVar} = Math.max(0, Math.floor(${emitExpr(node.countExpr)})); for (let ${idxVar} = 0; ${idxVar} < ${cntVar}; ${idxVar}++) { if (++__rt._loopTicks > 1000000) __royLoopTick(); ${node.body.stmts.map(s => locTag(s) + emitStmt(s)).join('\n')} } }`;
         }
         case 'DeleteStmt': return `delete ${emitExpr(node.target)};`;
         case 'Return':
@@ -1730,7 +1914,10 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 (function() {
   var canvas = document.getElementById('royCanvas');
   var rootCtx = canvas.getContext('2d');
-  var ctx = rootCtx;
+  var worldCanvas = document.createElement('canvas');
+  var worldCtx = worldCanvas.getContext('2d');
+  var frameBaseCtx = worldCtx;
+  var ctx = worldCtx;
   var SCALE_MODE = ${JSON.stringify(scaleMode)};
   var PIXELATED = ${pixelated ? 'true' : 'false'};
   var DPR = PIXELATED ? 1 : Math.min(2.5, Math.max(1, window.devicePixelRatio || 1));
@@ -1741,11 +1928,15 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
   canvas.width = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
+  worldCanvas.width = canvas.width;
+  worldCanvas.height = canvas.height;
   rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  worldCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
   var ASSET_MANIFEST = ${safeAssetsJson};
   var COMPILE_WARNINGS = ${safeWarningsJson};
   var hooks = { start: [], update: [], draw: [], drawUi: [], resize: [], keydown: [], keyup: [], click: [], pointermove: [], wheel: [] };
   var sceneHooks = {};
+  var registeredScenes = ['main'];
   var timers = [];
   var afterTimers = [];
   var tweens = [];
@@ -1753,6 +1944,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var entitiesDrawnThisFrame = false;
   var keysDown = {};
   var keysJustPressed = {};
+  var virtualAxis = { x: 0, y: 0, active: false };
   var touches = [];
   var toastQueue = [];
   var scrollStates = {};
@@ -1760,23 +1952,28 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var activeSliderId = null;
   var fontFamily = 'system-ui, -apple-system, sans-serif';
   var mouse = { x: W / 2, y: H / 2, rx: W / 2, ry: H / 2, wx: W / 2, wy: H / 2, down: false, clicked: false, justReleased: false, rightDown: false, rightClicked: false, middleDown: false, overUi: false, wheel: 0 };
-  var particlePool = [];
   var cam = { x: 0, y: 0, zoom: 1, shakePow: 0, shakeDur: 0, shakeTime: 0, followTarget: null, followSmooth: 8, bounds: null };
   var frameCamTransform = { ox: 0, oy: 0, active: false };
   var freezeRem = 0;
+  var gameplayTimeScale = 1;
   var flashState = { color: '#ffffff', rem: 0, dur: 0 };
+  var transitionState = { active: false, kind: 'fade', color: '#000000', dur: 0.4, elapsed: 0, switched: false, target: 'main', payload: undefined };
   var currentScene = 'main';
   var sceneTime = 0;
   var sceneFrame = 0;
   var inDraw = false;
   var gameTime = 0;
   var currentFps = 60;
+  var debugOverlay = false;
+  var debugSceneRects = [];
   var audioCtx = null;
+  var masterComp = null;
+  var noiseBuffer = null;
   var audioMuted = false;
   var tabMuted = false;
-  var bgmState = { timer: null, tracks: [], step: 0, nextTime: 0, stepSec: 0.125, vol: 0.055, key: '' };
+  var bgmState = { timer: null, tracks: [], drums: [], step: 0, nextTime: 0, stepSec: 0.125, vol: 0.055, key: '', bus: null };
   var runtimeErrorBanner = '';
-  var loopCounter = 0;
+  var lastLoopTicks = 0;
   var telemetryTimer = 0;
 
   if (${JSON.stringify(gamepadOpt)} !== null) {
@@ -1791,15 +1988,18 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
     canvas.width = Math.round(W * DPR);
     canvas.height = Math.round(H * DPR);
+    worldCanvas.width = canvas.width;
+    worldCanvas.height = canvas.height;
     rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    worldCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
     if (SCALE_MODE === 'resize') {
-      hooks.resize.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(W, H)).catch(handleHookError); });
+      hooks.resize.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(W, H)).catch(handleHookError); });
     }
   }
   window.addEventListener('resize', applyResizeMode);
 
   function __royLoopTick() {
-    if (++loopCounter > 250000) throw new Error('Превышен лимит итераций цикла за кадр');
+    if (__rt._loopTicks > 1000000) throw new Error('Превышен лимит итераций цикла за кадр (1 000 000)');
   }
 
   function emitConsole(level, text) {
@@ -1869,12 +2069,40 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return audioMuted;
   }
 
+  function ensureAudioMaster() {
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (!masterComp && audioCtx) {
+      try {
+        masterComp = audioCtx.createDynamicsCompressor();
+        masterComp.threshold.setValueAtTime(-16, audioCtx.currentTime);
+        masterComp.knee.setValueAtTime(18, audioCtx.currentTime);
+        masterComp.ratio.setValueAtTime(6, audioCtx.currentTime);
+        masterComp.attack.setValueAtTime(0.005, audioCtx.currentTime);
+        masterComp.release.setValueAtTime(0.18, audioCtx.currentTime);
+        masterComp.connect(audioCtx.destination);
+      } catch(e) {
+        masterComp = audioCtx.destination;
+      }
+    }
+    if (!noiseBuffer && audioCtx) {
+      try {
+        var sr = audioCtx.sampleRate || 44100;
+        var buf = audioCtx.createBuffer(1, Math.floor(sr * 0.5), sr);
+        var ch = buf.getChannelData(0);
+        for (var i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+        noiseBuffer = buf;
+      } catch(e) {}
+    }
+    return masterComp || (audioCtx && audioCtx.destination) || null;
+  }
+
   function tone(freq, durMsOrSec, wave, vol, slideToFreq) {
     if (audioMuted || tabMuted) return;
     try {
-      var Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      if (!audioCtx) audioCtx = new Ctx();
+      var dest = ensureAudioMaster();
+      if (!audioCtx || !dest) return;
       if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') audioCtx.resume().catch(function(){});
       var f = noteToFreq(freq);
       var rawD = Number(durMsOrSec) || 0.12;
@@ -1891,7 +2119,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       gain.gain.setValueAtTime(volume, nowT);
       gain.gain.exponentialRampToValueAtTime(0.001, nowT + dur);
       osc.connect(gain);
-      gain.connect(audioCtx.destination);
+      gain.connect(dest);
       osc.start(nowT);
       osc.stop(nowT + dur);
     } catch(e) {}
@@ -1923,7 +2151,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return String(seq || '').trim().split(/\\s+/);
   }
 
-  function scheduleBgmStep(noteStr, atTime, durSec, wave, vol) {
+  function scheduleBgmStep(noteStr, atTime, durSec, wave, vol, outNode) {
     if (!noteStr || noteStr === '-' || noteStr === '_' || noteStr === '.') return;
     if (!audioCtx || audioMuted || tabMuted) return;
     try {
@@ -1934,23 +2162,80 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       gain.gain.setValueAtTime(Math.max(0.002, vol), atTime);
       gain.gain.exponentialRampToValueAtTime(0.0008, atTime + Math.max(0.04, durSec * 0.92));
       osc.connect(gain);
-      gain.connect(audioCtx.destination);
+      gain.connect(outNode || masterComp || audioCtx.destination);
       osc.start(atTime);
       osc.stop(atTime + durSec);
     } catch(e) {}
   }
 
+  function scheduleDrumStep(tok, atTime, vol, outNode) {
+    if (!tok || tok === '.' || tok === '-' || tok === '_') return;
+    if (!audioCtx || audioMuted || tabMuted) return;
+    var code = String(tok).toUpperCase();
+    var dest = outNode || masterComp || audioCtx.destination;
+    var v = Math.max(0.01, Math.min(0.45, vol * 2.2));
+    try {
+      if (code === 'K') {
+        var kOsc = audioCtx.createOscillator();
+        var kGain = audioCtx.createGain();
+        kOsc.type = 'sine';
+        kOsc.frequency.setValueAtTime(145, atTime);
+        kOsc.frequency.exponentialRampToValueAtTime(42, atTime + 0.13);
+        kGain.gain.setValueAtTime(v, atTime);
+        kGain.gain.exponentialRampToValueAtTime(0.001, atTime + 0.14);
+        kOsc.connect(kGain); kGain.connect(dest);
+        kOsc.start(atTime); kOsc.stop(atTime + 0.15);
+      } else if (code === 'S') {
+        if (noiseBuffer) {
+          var sSrc = audioCtx.createBufferSource();
+          sSrc.buffer = noiseBuffer;
+          var sHp = audioCtx.createBiquadFilter();
+          sHp.type = 'highpass'; sHp.frequency.setValueAtTime(950, atTime);
+          var sGain = audioCtx.createGain();
+          sGain.gain.setValueAtTime(v * 0.65, atTime);
+          sGain.gain.exponentialRampToValueAtTime(0.001, atTime + 0.13);
+          sSrc.connect(sHp); sHp.connect(sGain); sGain.connect(dest);
+          sSrc.start(atTime); sSrc.stop(atTime + 0.14);
+        }
+        var bOsc = audioCtx.createOscillator();
+        var bGain = audioCtx.createGain();
+        bOsc.type = 'triangle';
+        bOsc.frequency.setValueAtTime(195, atTime);
+        bOsc.frequency.exponentialRampToValueAtTime(95, atTime + 0.08);
+        bGain.gain.setValueAtTime(v * 0.5, atTime);
+        bGain.gain.exponentialRampToValueAtTime(0.001, atTime + 0.09);
+        bOsc.connect(bGain); bGain.connect(dest);
+        bOsc.start(atTime); bOsc.stop(atTime + 0.1);
+      } else if ((code === 'H' || code === 'O') && noiseBuffer) {
+        var hSrc = audioCtx.createBufferSource();
+        hSrc.buffer = noiseBuffer;
+        var hHp = audioCtx.createBiquadFilter();
+        hHp.type = 'highpass'; hHp.frequency.setValueAtTime(code === 'O' ? 5800 : 7200, atTime);
+        var hGain = audioCtx.createGain();
+        var hDur = code === 'O' ? 0.15 : 0.045;
+        hGain.gain.setValueAtTime(v * 0.38, atTime);
+        hGain.gain.exponentialRampToValueAtTime(0.001, atTime + hDur);
+        hSrc.connect(hHp); hHp.connect(hGain); hGain.connect(dest);
+        hSrc.start(atTime); hSrc.stop(atTime + hDur + 0.01);
+      }
+    } catch(e) {}
+  }
+
   function stopBgm() {
     if (bgmState.timer) { clearInterval(bgmState.timer); bgmState.timer = null; }
+    if (bgmState.bus) { try { bgmState.bus.disconnect(); } catch(e) {} bgmState.bus = null; }
     bgmState.tracks = [];
+    bgmState.drums = [];
     bgmState.key = '';
   }
 
-  function bgm(patterns, bpm, wave, vol) {
-    var sig = JSON.stringify([patterns, bpm, wave, vol]);
+  function bgm(patterns, bpm, wave, vol, opts) {
+    var cfg = (opts && typeof opts === 'object') ? opts : ((patterns && typeof patterns === 'object' && !Array.isArray(patterns)) ? patterns : {});
+    var sig = JSON.stringify([patterns, bpm, wave, vol, opts]);
     if (bgmState.timer && bgmState.key === sig) return;
     stopBgm();
     var trackList = [];
+    var drumList = [];
     var baseVol = vol === undefined ? 0.05 : Math.max(0.005, Math.min(0.4, Number(vol)));
     if (Array.isArray(patterns) || typeof patterns === 'string') {
       trackList.push({ notes: parseBgmNotes(patterns), wave: wave || 'triangle', vol: baseVol });
@@ -1958,15 +2243,41 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       if (patterns.lead) trackList.push({ notes: parseBgmNotes(patterns.lead), wave: wave || 'square', vol: baseVol });
       if (patterns.bass) trackList.push({ notes: parseBgmNotes(patterns.bass), wave: 'sawtooth', vol: baseVol * 0.85 });
       if (patterns.arp) trackList.push({ notes: parseBgmNotes(patterns.arp), wave: 'triangle', vol: baseVol * 0.65 });
+      if (patterns.drums) drumList = parseBgmNotes(patterns.drums);
     }
-    if (!trackList.length) return;
+    if (!trackList.length && !drumList.length) return;
     var tempo = Math.max(40, Math.min(300, Number(bpm) || 120));
     bgmState.stepSec = 60 / tempo / 2;
     bgmState.tracks = trackList;
+    bgmState.drums = drumList;
     bgmState.step = 0;
     bgmState.key = sig;
-    var Ctx = window.AudioContext || window.webkitAudioContext;
-    if (Ctx && !audioCtx) audioCtx = new Ctx();
+    var dest = ensureAudioMaster();
+    if (audioCtx && dest) {
+      var busIn = audioCtx.createGain();
+      var chainTail = busIn;
+      if (cfg.lowpass || cfg.cutoff) {
+        var lp = audioCtx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.setValueAtTime(Math.max(120, Math.min(18000, Number(cfg.lowpass || cfg.cutoff) || 2400)), audioCtx.currentTime);
+        chainTail.connect(lp);
+        chainTail = lp;
+      }
+      chainTail.connect(dest);
+      var echoAmt = Number(cfg.delay !== undefined ? cfg.delay : cfg.echo) || 0;
+      if (echoAmt > 0 && audioCtx.createDelay) {
+        var dly = audioCtx.createDelay(1.0);
+        dly.delayTime.setValueAtTime(Math.min(0.6, bgmState.stepSec * 1.5), audioCtx.currentTime);
+        var fb = audioCtx.createGain();
+        fb.gain.setValueAtTime(Math.min(0.55, echoAmt * 0.45), audioCtx.currentTime);
+        var wet = audioCtx.createGain();
+        wet.gain.setValueAtTime(Math.min(0.6, echoAmt * 0.5), audioCtx.currentTime);
+        chainTail.connect(dly);
+        dly.connect(fb); fb.connect(dly);
+        dly.connect(wet); wet.connect(dest);
+      }
+      bgmState.bus = busIn;
+    }
     bgmState.nextTime = audioCtx ? audioCtx.currentTime + 0.05 : 0;
     bgmState.timer = setInterval(function() {
       if (!audioCtx) return;
@@ -1979,8 +2290,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         for (var ti = 0; ti < bgmState.tracks.length; ti++) {
           var tr = bgmState.tracks[ti];
           if (tr.notes.length > 0) {
-            scheduleBgmStep(tr.notes[bgmState.step % tr.notes.length], bgmState.nextTime, bgmState.stepSec, tr.wave, tr.vol);
+            scheduleBgmStep(tr.notes[bgmState.step % tr.notes.length], bgmState.nextTime, bgmState.stepSec, tr.wave, tr.vol, bgmState.bus);
           }
+        }
+        if (bgmState.drums.length > 0) {
+          scheduleDrumStep(bgmState.drums[bgmState.step % bgmState.drums.length], bgmState.nextTime, baseVol, bgmState.bus);
         }
         bgmState.nextTime += bgmState.stepSec;
         bgmState.step++;
@@ -1990,6 +2304,10 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   function loadImageAsset(path, onDone) {
     var img = new Image();
+    var pStr = String(path || '');
+    if (pStr.indexOf('data:') !== 0 && pStr.indexOf('blob:') !== 0) {
+      img.crossOrigin = 'anonymous';
+    }
     var wrap = {
       path: path, ready: false, width: 0, height: 0, img: img,
       draw: function(px, py, rot, scaleMul, flipX) {
@@ -2035,7 +2353,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       emitConsole('error', 'Не удалось загрузить картинку: ' + path);
       if (onDone) onDone(wrap);
     };
-    img.src = String(path || '');
+    img.src = pStr;
     return wrap;
   }
 
@@ -2298,14 +2616,38 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return { hit: false, x: x2, y: y2, dist: totalDist, target: null };
   }
 
+  function isOptsObj(v) {
+    return v !== null && typeof v === 'object' && !Array.isArray(v);
+  }
+
   function drawRect(x, y, w, h, color, radius) {
-    ctx.fillStyle = color || '#38bdf8';
-    if (radius && radius > 0 && ctx.roundRect) {
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, radius);
-      ctx.fill();
-    } else {
-      ctx.fillRect(x, y, w, h);
+    var col = color, rad = radius, strokeC = null, lw = 2;
+    if (isOptsObj(color)) {
+      col = color.color !== undefined ? color.color : (color.fill !== undefined ? color.fill : '#38bdf8');
+      rad = color.radius !== undefined ? color.radius : color.r;
+      strokeC = color.stroke || color.strokeColor || null;
+      lw = color.lw || color.lineWidth || 2;
+    }
+    if (col !== null) {
+      ctx.fillStyle = col || '#38bdf8';
+      if (rad && rad > 0 && ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, rad);
+        ctx.fill();
+      } else {
+        ctx.fillRect(x, y, w, h);
+      }
+    }
+    if (strokeC) {
+      ctx.strokeStyle = strokeC;
+      ctx.lineWidth = lw;
+      if (rad && rad > 0 && ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, rad);
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(x, y, w, h);
+      }
     }
   }
 
@@ -2320,17 +2662,30 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   function button(label, x, y, w, h, col, hoverCol, textCol, radius) {
     var bw = Number(w) || 160, bh = Number(h) || 44;
+    var o = null;
+    if (isOptsObj(w)) {
+      o = w;
+      bw = Number(o.w || o.width) || 160;
+      bh = Number(o.h || o.height) || 44;
+    } else if (isOptsObj(col)) {
+      o = col;
+    }
+    var fillC = o ? (o.color || o.col || o.bg) : col;
+    var hovC = o ? (o.hoverCol || o.hover) : hoverCol;
+    var txtC = o ? (o.textCol || o.textColor) : textCol;
+    var bdrC = o ? (o.borderCol || o.border) : null;
+    var rad = o && (o.radius !== undefined || o.r !== undefined) ? (o.radius !== undefined ? o.radius : o.r) : (radius === undefined ? 8 : radius);
     var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
     var hov = mx >= x && mx <= x + bw && my >= y && my <= y + bh;
     if (hov) mouse.overUi = true;
-    var rad = radius === undefined ? 8 : radius;
-    drawRect(x, y, bw, bh, hov ? (hoverCol || '#2563eb') : (col || '#1e293b'), rad);
-    ctx.strokeStyle = hov ? '#93c5fd' : 'rgba(148,163,184,0.35)';
+    drawRect(x, y, bw, bh, hov ? (hovC || '#2563eb') : (fillC || '#1e293b'), rad);
+    ctx.strokeStyle = bdrC || (hov ? '#93c5fd' : 'rgba(148,163,184,0.35)');
     ctx.lineWidth = hov ? 2 : 1;
     if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, bw, bh, rad); ctx.stroke(); }
     else { ctx.strokeRect(x, y, bw, bh); }
-    ctx.fillStyle = textCol || '#f8fafc';
-    ctx.font = '800 ' + Math.max(12, Math.min(20, Math.floor(bh * 0.42))) + 'px ' + fontFamily;
+    ctx.fillStyle = txtC || '#f8fafc';
+    var fSz = (o && o.fontSize) ? Number(o.fontSize) : Math.max(12, Math.min(20, Math.floor(bh * 0.42)));
+    ctx.font = '800 ' + fSz + 'px ' + fontFamily;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(label || ''), x + bw / 2, y + bh / 2);
@@ -2340,11 +2695,15 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function panel(x, y, w, h, bgCol, borderCol, radius, lw) {
-    var rad = radius === undefined ? 10 : radius;
-    drawRect(x, y, w, h, bgCol || 'rgba(15,23,42,0.88)', rad);
-    if (borderCol !== null) {
-      ctx.strokeStyle = borderCol || 'rgba(148,163,184,0.35)';
-      ctx.lineWidth = lw || 1.5;
+    var o = isOptsObj(bgCol) ? bgCol : null;
+    var bg = o ? (o.bgCol !== undefined ? o.bgCol : (o.bg !== undefined ? o.bg : o.color)) : bgCol;
+    var brd = o ? (o.borderCol !== undefined ? o.borderCol : o.border) : borderCol;
+    var rad = o && (o.radius !== undefined || o.r !== undefined) ? (o.radius !== undefined ? o.radius : o.r) : (radius === undefined ? 10 : radius);
+    var lineW = o ? (o.lw || o.lineWidth || 1.5) : (lw || 1.5);
+    drawRect(x, y, w, h, bg || 'rgba(15,23,42,0.88)', rad);
+    if (brd !== null) {
+      ctx.strokeStyle = brd || 'rgba(148,163,184,0.35)';
+      ctx.lineWidth = lineW;
       if (ctx.roundRect && rad > 0) { ctx.beginPath(); ctx.roundRect(x, y, w, h, rad); ctx.stroke(); }
       else { ctx.strokeRect(x, y, w, h); }
     }
@@ -2395,11 +2754,13 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function slider(val, minVal, maxVal, x, y, w, col) {
-    var sw = Number(w) || 180;
+    var o = isOptsObj(w) ? w : null;
+    var sw = Number(o ? (o.w || o.width) : w) || 180;
+    var fillC = (o ? (o.color || o.col) : col) || '#38bdf8';
     var mn = Number(minVal) || 0, mxV = maxVal === undefined ? 100 : Number(maxVal);
     var span = (mxV - mn) || 1;
     var v = Math.max(mn, Math.min(mxV, Number(val) || 0));
-    var id = 'sl_' + Math.round(x) + '_' + Math.round(y) + '_' + Math.round(sw);
+    var id = (o && o.id) ? String(o.id) : ('sl_' + Math.round(x) + '_' + Math.round(y) + '_' + Math.round(sw));
     var mx = mouse.x - uiScrollOffset.x, my = mouse.y - uiScrollOffset.y;
     var hov = mx >= x - 8 && mx <= x + sw + 8 && my >= y - 10 && my <= y + 18;
     if (hov) mouse.overUi = true;
@@ -2410,7 +2771,6 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       v = mn + ratioNew * span;
     }
     var ratio = Math.max(0, Math.min(1, (v - mn) / span));
-    var fillC = col || '#38bdf8';
     drawRect(x, y + 2, sw, 6, '#1e293b', 3);
     if (ratio > 0) drawRect(x, y + 2, sw * ratio, 6, fillC, 3);
     drawCircle(x + sw * ratio, y + 5, hov || activeSliderId === id ? 9 : 7, '#ffffff');
@@ -2433,12 +2793,16 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function drawArc(x, y, r, startAng, endAng, color, lw, fillColor) {
+    var o = isOptsObj(color) ? color : null;
+    var strokeC = o ? (o.color !== undefined ? o.color : o.stroke) : color;
+    var lineW = o ? (o.lw || o.lineWidth || 3) : (lw || 3);
+    var fillC = o ? (o.fill || o.fillColor || o.fillCol || null) : fillColor;
     var rad = Math.max(0, Number(r) || 16);
     ctx.beginPath();
-    if (fillColor) ctx.moveTo(x, y);
+    if (fillC) ctx.moveTo(x, y);
     ctx.arc(x, y, rad, Number(startAng) || 0, Number(endAng) || Math.PI * 2);
-    if (fillColor) { ctx.closePath(); ctx.fillStyle = fillColor; ctx.fill(); }
-    if (color !== null) { ctx.strokeStyle = color || '#38bdf8'; ctx.lineWidth = lw || 3; ctx.stroke(); }
+    if (fillC) { ctx.closePath(); ctx.fillStyle = fillC; ctx.fill(); }
+    if (strokeC !== null) { ctx.strokeStyle = strokeC || '#38bdf8'; ctx.lineWidth = lineW; ctx.stroke(); }
   }
 
   function drawRing(x, y, innerR, outerR, color) {
@@ -2451,10 +2815,15 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function drawEllipse(x, y, rx, ry, color, rot, strokeCol, lw) {
+    var o = isOptsObj(color) ? color : null;
+    var fillC = o ? (o.color !== undefined ? o.color : o.fill) : color;
+    var rAng = Number(o ? (o.rot !== undefined ? o.rot : o.rotation) : rot) || 0;
+    var sCol = o ? (o.stroke || o.strokeCol || o.strokeColor) : strokeCol;
+    var lineW = o ? (o.lw || o.lineWidth || 2) : (lw || 2);
     ctx.beginPath();
-    ctx.ellipse(x, y, Math.max(0, Number(rx) || 16), Math.max(0, Number(ry) || 10), Number(rot) || 0, 0, Math.PI * 2);
-    if (color) { ctx.fillStyle = color; ctx.fill(); }
-    if (strokeCol) { ctx.strokeStyle = strokeCol; ctx.lineWidth = lw || 2; ctx.stroke(); }
+    ctx.ellipse(x, y, Math.max(0, Number(rx) || 16), Math.max(0, Number(ry) || 10), rAng, 0, Math.PI * 2);
+    if (fillC) { ctx.fillStyle = fillC; ctx.fill(); }
+    if (sCol) { ctx.strokeStyle = sCol; ctx.lineWidth = lineW; ctx.stroke(); }
   }
 
   function drawCurve(x1, y1, cx, cy, x2, y2, color, lw) {
@@ -2505,6 +2874,34 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     ctx.fill();
   }
 
+  function drawTrail(points, wStart, wEnd, cStart, cEnd) {
+    if (!Array.isArray(points) || points.length < 2) return;
+    var o = isOptsObj(wStart) ? wStart : null;
+    var ws = Number(o ? (o.wStart !== undefined ? o.wStart : o.width) : wStart) || 10;
+    var we = Number(o ? (o.wEnd !== undefined ? o.wEnd : 1) : (wEnd === undefined ? 1 : wEnd));
+    var cs = (o ? (o.cStart || o.color) : cStart) || '#38bdf8';
+    var ce = (o ? (o.cEnd || o.colorEnd) : cEnd) || cs;
+    var n = points.length;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (var i = 0; i < n - 1; i++) {
+      var p0 = points[i], p1 = points[i + 1];
+      var x0 = Array.isArray(p0) ? p0[0] : p0.x, y0 = Array.isArray(p0) ? p0[1] : p0.y;
+      var x1 = Array.isArray(p1) ? p1[0] : p1.x, y1 = Array.isArray(p1) ? p1[1] : p1.y;
+      var t = n > 2 ? i / (n - 2) : 1;
+      var segW = ws + (we - ws) * t;
+      if (segW <= 0.1) continue;
+      ctx.strokeStyle = cs === ce ? cs : lerpColor(cs, ce, t);
+      ctx.lineWidth = segW;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function createLayer(lw, lh) {
     var cw = Math.max(1, Math.floor(Number(lw) || W));
     var ch = Math.max(1, Math.floor(Number(lh) || H));
@@ -2513,10 +2910,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     off.width = Math.round(cw * lDpr); off.height = Math.round(ch * lDpr);
     var octx = off.getContext('2d');
     octx.setTransform(lDpr, 0, 0, lDpr, 0, 0);
+    var prevCtx = null;
     return {
       width: cw, height: ch, canvas: off,
-      begin: function() { ctx = octx; },
-      end: function() { ctx = rootCtx; },
+      begin: function() { prevCtx = ctx; ctx = octx; },
+      end: function() { ctx = prevCtx || frameBaseCtx || rootCtx; prevCtx = null; },
       clear: function(col) {
         octx.save();
         octx.setTransform(lDpr, 0, 0, lDpr, 0, 0);
@@ -2526,13 +2924,18 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       },
       draw: function(px, py, rot, sx, sy) {
         var x0 = px || 0, y0 = py || 0;
-        var scaleX = sx === undefined ? 1 : Number(sx);
-        var scaleY = sy === undefined ? scaleX : Number(sy);
+        var scaleX = (sx === undefined || sx === null) ? 1 : Number(sx);
+        var scaleY = scaleX;
+        if (typeof sy === 'boolean') {
+          if (sy) scaleX = -Math.abs(scaleX);
+        } else if (sy !== undefined && sy !== null) {
+          scaleY = Number(sy);
+        }
         if (!rot && scaleX === 1 && scaleY === 1) {
           ctx.drawImage(off, 0, 0, off.width, off.height, x0, y0, cw, ch);
         } else {
           ctx.save();
-          ctx.translate(x0 + (cw * scaleX) / 2, y0 + (ch * scaleY) / 2);
+          ctx.translate(x0 + (cw * Math.abs(scaleX)) / 2, y0 + (ch * Math.abs(scaleY)) / 2);
           if (rot) ctx.rotate(rot);
           ctx.scale(scaleX, scaleY);
           ctx.drawImage(off, 0, 0, off.width, off.height, -cw / 2, -ch / 2, cw, ch);
@@ -2543,11 +2946,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function beginScreenSpace() {
-    if (ctx === rootCtx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (ctx === frameBaseCtx || ctx === rootCtx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   }
 
   function beginWorldSpace() {
-    if (ctx !== rootCtx) return;
+    if (ctx !== frameBaseCtx && ctx !== rootCtx) return;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     if (frameCamTransform.active) {
       ctx.translate(W / 2 + frameCamTransform.ox, H / 2 + frameCamTransform.oy);
@@ -2704,9 +3107,15 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function drawBar(x, y, w, h, ratio, fillCol, bgCol, radius) {
+    var o = isOptsObj(fillCol) ? fillCol : null;
+    var fCol = o ? (o.fill || o.fillCol || o.color) : fillCol;
+    var bCol = o ? (o.bg || o.bgCol) : bgCol;
+    var rad = o && (o.radius !== undefined || o.r !== undefined) ? (o.radius !== undefined ? o.radius : o.r) : (radius || 4);
+    var brd = o ? (o.border || o.borderCol) : null;
     var r = Math.max(0, Math.min(1, Number(ratio) || 0));
-    drawRect(x, y, w, h, bgCol || 'rgba(15,23,42,0.85)', radius || 4);
-    if (r > 0) drawRect(x, y, w * r, h, fillCol || '#34d399', radius || 4);
+    drawRect(x, y, w, h, bCol || 'rgba(15,23,42,0.85)', rad);
+    if (r > 0) drawRect(x, y, w * r, h, fCol || '#34d399', rad);
+    if (brd) strokeRect(x, y, w, h, brd, 1.5);
   }
 
   function drawGrid(cellSize, color, lw) {
@@ -2720,23 +3129,33 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function text(str, x, y, color, size, align) {
-    ctx.fillStyle = color || '#f8fafc';
-    ctx.font = '700 ' + (Number(size) || 18) + 'px ' + fontFamily;
-    ctx.textAlign = align || 'left';
-    ctx.textBaseline = 'top';
+    var o = isOptsObj(color) ? color : null;
+    var col = o ? (o.color || o.fill) : color;
+    var sz = o ? Number(o.size || 18) : (Number(size) || 18);
+    var al = o ? (o.align || 'left') : (align || 'left');
+    ctx.fillStyle = col || '#f8fafc';
+    ctx.font = '700 ' + sz + 'px ' + (o && o.font ? o.font : fontFamily);
+    ctx.textAlign = al;
+    ctx.textBaseline = (o && o.baseline) ? o.baseline : 'top';
     ctx.fillText(String(str === undefined ? '' : str), x, y);
   }
 
   function textStroke(str, x, y, color, strokeColor, size, align, lw) {
     var s = String(str === undefined ? '' : str);
-    ctx.font = '800 ' + (Number(size) || 20) + 'px ' + fontFamily;
-    ctx.textAlign = align || 'left';
-    ctx.textBaseline = 'top';
+    var o = isOptsObj(color) ? color : null;
+    var col = o ? (o.color || o.fill) : color;
+    var sCol = o ? (o.stroke || o.strokeColor) : strokeColor;
+    var sz = Number(o ? o.size : size) || 20;
+    var al = (o ? o.align : align) || 'left';
+    var lineW = Number(o ? (o.lw !== undefined ? o.lw : o.lineWidth) : lw) || 4;
+    ctx.font = '800 ' + sz + 'px ' + fontFamily;
+    ctx.textAlign = al;
+    ctx.textBaseline = (o && o.baseline) ? o.baseline : 'top';
     ctx.lineJoin = 'round';
-    ctx.lineWidth = lw || 4;
-    ctx.strokeStyle = strokeColor || '#020617';
+    ctx.lineWidth = lineW;
+    ctx.strokeStyle = sCol || '#020617';
     ctx.strokeText(s, x, y);
-    ctx.fillStyle = color || '#f8fafc';
+    ctx.fillStyle = col || '#f8fafc';
     ctx.fillText(s, x, y);
   }
 
@@ -2748,12 +3167,15 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   }
 
   function textWrap(str, x, y, maxW, color, size, align, lineH) {
-    var sz = Number(size) || 16;
-    var lh = Number(lineH) || Math.round(sz * 1.32);
-    var mw = Math.max(20, Number(maxW) || 240);
-    ctx.fillStyle = color || '#f8fafc';
+    var o = isOptsObj(maxW) ? maxW : (isOptsObj(color) ? color : null);
+    var mw = Math.max(20, Number(o && maxW === o ? (o.maxW || o.width) : maxW) || 240);
+    var col = o ? (o.color || o.fill) : color;
+    var sz = Number(o ? o.size : size) || 16;
+    var al = (o ? o.align : align) || 'left';
+    var lh = Number(o ? (o.lineH || o.lineHeight) : lineH) || Math.round(sz * 1.32);
+    ctx.fillStyle = col || '#f8fafc';
     ctx.font = '700 ' + sz + 'px ' + fontFamily;
-    ctx.textAlign = align || 'left';
+    ctx.textAlign = al;
     ctx.textBaseline = 'top';
     var paragraphs = String(str === undefined ? '' : str).split('\\n');
     var curY = y;
@@ -2891,20 +3313,592 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     return obj;
   }
 
+  // --- Procedural Noise, Colors, Circle Physics, Spatial Query ---
+  function hash2d(ix, iy, seed) {
+    var h = (ix * 374761393 + iy * 668265263 + (seed || 0) * 1442695041) | 0;
+    h = (h ^ (h >> 13)) * 1274126177;
+    return ((h ^ (h >> 16)) >>> 0) / 4294967295;
+  }
+  function smoothFade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+  function noise2d(x, y, seed) {
+    var fx = Number(x) || 0, fy = Number(y) || 0, sd = Math.floor(Number(seed) || 0);
+    var x0 = Math.floor(fx), y0 = Math.floor(fy);
+    var dx = fx - x0, dy = fy - y0;
+    var u = smoothFade(dx), v = smoothFade(dy);
+    var n00 = hash2d(x0, y0, sd), n10 = hash2d(x0 + 1, y0, sd);
+    var n01 = hash2d(x0, y0 + 1, sd), n11 = hash2d(x0 + 1, y0 + 1, sd);
+    var nx0 = n00 + (n10 - n00) * u;
+    var nx1 = n01 + (n11 - n01) * u;
+    return (nx0 + (nx1 - nx0) * v) * 2 - 1;
+  }
+  function fbm(x, y, octaves, seed) {
+    var oct = Math.max(1, Math.min(8, Math.floor(Number(octaves) || 4)));
+    var amp = 0.5, freq = 1, sum = 0, norm = 0;
+    for (var i = 0; i < oct; i++) {
+      sum += amp * noise2d((Number(x) || 0) * freq, (Number(y) || 0) * freq, (Number(seed) || 0) + i * 101);
+      norm += amp; amp *= 0.5; freq *= 2;
+    }
+    return norm > 0 ? sum / norm : 0;
+  }
+  function hsl(h, s, l, a) {
+    var hh = Math.round(Number(h) || 0);
+    var ss = Math.max(0, Math.min(100, s === undefined ? 80 : Number(s)));
+    var ll = Math.max(0, Math.min(100, l === undefined ? 55 : Number(l)));
+    if (a !== undefined && a !== null && Number(a) < 1) {
+      return 'hsla(' + hh + ',' + ss + '%,' + ll + '%,' + Math.max(0, Math.min(1, Number(a))) + ')';
+    }
+    return 'hsl(' + hh + ',' + ss + '%,' + ll + '%)';
+  }
+  var _colorCache = {};
+  function parseColorRgba(c) {
+    var key = String(c || '#ffffff').trim();
+    if (_colorCache[key]) return _colorCache[key];
+    var r = 255, g = 255, b = 255, a = 1;
+    if (key[0] === '#') {
+      var hx = key.slice(1);
+      if (hx.length === 3 || hx.length === 4) {
+        r = parseInt(hx[0] + hx[0], 16) || 0;
+        g = parseInt(hx[1] + hx[1], 16) || 0;
+        b = parseInt(hx[2] + hx[2], 16) || 0;
+        if (hx.length === 4) a = (parseInt(hx[3] + hx[3], 16) || 255) / 255;
+      } else if (hx.length >= 6) {
+        r = parseInt(hx.slice(0, 2), 16) || 0;
+        g = parseInt(hx.slice(2, 4), 16) || 0;
+        b = parseInt(hx.slice(4, 6), 16) || 0;
+        if (hx.length === 8) a = (parseInt(hx.slice(6, 8), 16) || 255) / 255;
+      }
+    } else {
+      var m = /^rgba?\\(([^)]+)\\)$/i.exec(key);
+      if (m) {
+        var ps = m[1].split(',');
+        r = Number(ps[0]) || 0; g = Number(ps[1]) || 0; b = Number(ps[2]) || 0;
+        if (ps[3] !== undefined) a = Number(ps[3]);
+      } else {
+        var mH = /^hsla?\\(([^)]+)\\)$/i.exec(key);
+        if (mH) {
+          var hp = mH[1].split(',');
+          var H0 = ((Number(hp[0]) % 360) + 360) % 360 / 360;
+          var S0 = (parseFloat(hp[1]) || 0) / 100;
+          var L0 = (parseFloat(hp[2]) || 0) / 100;
+          if (hp[3] !== undefined) a = Number(hp[3]);
+          var q0 = L0 < 0.5 ? L0 * (1 + S0) : L0 + S0 - L0 * S0;
+          var p0 = 2 * L0 - q0;
+          var h2r = function(t) {
+            if (t < 0) t += 1; if (t > 1) t -= 1;
+            if (t < 1/6) return p0 + (q0 - p0) * 6 * t;
+            if (t < 0.5) return q0;
+            if (t < 2/3) return p0 + (q0 - p0) * (2/3 - t) * 6;
+            return p0;
+          };
+          r = Math.round(h2r(H0 + 1/3) * 255);
+          g = Math.round(h2r(H0) * 255);
+          b = Math.round(h2r(H0 - 1/3) * 255);
+        }
+      }
+    }
+    var res = [r | 0, g | 0, b | 0, Math.max(0, Math.min(1, a))];
+    if (Object.keys(_colorCache).length < 512) _colorCache[key] = res;
+    return res;
+  }
+  function lerpColor(c1, c2, t) {
+    var k = Math.max(0, Math.min(1, Number(t) || 0));
+    var a = parseColorRgba(c1), b = parseColorRgba(c2);
+    var r = Math.round(a[0] + (b[0] - a[0]) * k);
+    var g = Math.round(a[1] + (b[1] - a[1]) * k);
+    var bl = Math.round(a[2] + (b[2] - a[2]) * k);
+    var al = a[3] + (b[3] - a[3]) * k;
+    return al < 0.999 ? ('rgba(' + r + ',' + g + ',' + bl + ',' + al.toFixed(3) + ')') : ('rgb(' + r + ',' + g + ',' + bl + ')');
+  }
+
+  function bounceCircle(ent, obstacles, elasticity, radiusOverride) {
+    if (!ent) return { hit: false, nx: 0, ny: 0 };
+    var rad = Number(radiusOverride || ent.r || (ent.w ? ent.w * 0.5 : 16)) || 16;
+    var el = elasticity === undefined ? 0.85 : Number(elasticity);
+    var list = !obstacles ? [] : (Array.isArray(obstacles) ? obstacles : [obstacles]);
+    var hit = false, lnx = 0, lny = 0;
+    function resolveBox(bx, by, bw, bh) {
+      var cx = Math.max(bx, Math.min(bx + bw, ent.x));
+      var cy = Math.max(by, Math.min(by + bh, ent.y));
+      var dx = ent.x - cx, dy = ent.y - cy;
+      var d2 = dx * dx + dy * dy;
+      if (d2 >= rad * rad) return;
+      hit = true;
+      var nx = 0, ny = 0, pen = 0;
+      if (d2 > 0.00001) {
+        var d = Math.sqrt(d2);
+        nx = dx / d; ny = dy / d; pen = rad - d;
+      } else {
+        var dl = Math.abs(ent.x - bx), dr = Math.abs(bx + bw - ent.x);
+        var dt = Math.abs(ent.y - by), db = Math.abs(by + bh - ent.y);
+        var m = Math.min(dl, dr, dt, db);
+        if (m === dl) { nx = -1; pen = rad + dl; }
+        else if (m === dr) { nx = 1; pen = rad + dr; }
+        else if (m === dt) { ny = -1; pen = rad + dt; }
+        else { ny = 1; pen = rad + db; }
+      }
+      ent.x += nx * pen;
+      ent.y += ny * pen;
+      var vn = (ent.vx || 0) * nx + (ent.vy || 0) * ny;
+      if (vn < 0) {
+        ent.vx = (ent.vx || 0) - (1 + el) * vn * nx;
+        ent.vy = (ent.vy || 0) - (1 + el) * vn * ny;
+      }
+      lnx = nx; lny = ny;
+    }
+    for (var i = 0; i < list.length; i++) {
+      var ob = list[i];
+      if (!ob || ob === ent || ob.alive === false) continue;
+      if (ob._isTilemap) {
+        var ts = ob.tileSize;
+        var x0 = Math.floor((ent.x - rad) / ts), y0 = Math.floor((ent.y - rad) / ts);
+        var x1 = Math.floor((ent.x + rad) / ts), y1 = Math.floor((ent.y + rad) / ts);
+        for (var gy = y0; gy <= y1; gy++) {
+          if (gy < 0 || gy >= ob.rows) continue;
+          for (var gx = x0; gx <= x1; gx++) {
+            if (gx < 0 || gx >= ob.cols) continue;
+            if (ob._isSolidChar(ob.get(gx, gy))) resolveBox(gx * ts, gy * ts, ts, ts);
+          }
+        }
+      } else if (ob._shape === 'circle') {
+        var r2 = Number(ob.r) || 16;
+        var dx = ent.x - ob.x, dy = ent.y - ob.y;
+        var d2 = dx * dx + dy * dy, minR = rad + r2;
+        if (d2 < minR * minR) {
+          hit = true;
+          var d = Math.sqrt(d2) || 0.001;
+          var nx = dx / d, ny = dy / d;
+          ent.x += nx * (minR - d); ent.y += ny * (minR - d);
+          var vn = (ent.vx || 0) * nx + (ent.vy || 0) * ny;
+          if (vn < 0) {
+            ent.vx = (ent.vx || 0) - (1 + el) * vn * nx;
+            ent.vy = (ent.vy || 0) - (1 + el) * vn * ny;
+          }
+          lnx = nx; lny = ny;
+        }
+      } else {
+        resolveBox(Number(ob.x) || 0, Number(ob.y) || 0, Number(ob.w) || 0, Number(ob.h) || 0);
+      }
+    }
+    return { hit: hit, nx: lnx, ny: lny };
+  }
+
+  function spatialQuery(entitiesList, x, y, radius) {
+    var list = Array.isArray(entitiesList) ? entitiesList : worldEntities;
+    var qx = Number(x) || 0, qy = Number(y) || 0, r2 = (Number(radius) || 64);
+    r2 = r2 * r2;
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (!e || e.alive === false) continue;
+      var ex = e._shape === 'circle' ? e.x : (e.x + (e.w || 0) * 0.5);
+      var ey = e._shape === 'circle' ? e.y : (e.y + (e.h || 0) * 0.5);
+      var dx = ex - qx, dy = ey - qy;
+      if (dx * dx + dy * dy <= r2) out.push(e);
+    }
+    return out;
+  }
+
+  // --- Pre-allocated Float32Array 5,000 Particle Pool ---
+  var MAX_PARTICLES = 5000;
+  var pCount = 0;
+  var pX = new Float32Array(MAX_PARTICLES), pY = new Float32Array(MAX_PARTICLES);
+  var pVx = new Float32Array(MAX_PARTICLES), pVy = new Float32Array(MAX_PARTICLES);
+  var pLife = new Float32Array(MAX_PARTICLES), pMaxLife = new Float32Array(MAX_PARTICLES);
+  var pSz0 = new Float32Array(MAX_PARTICLES), pSz1 = new Float32Array(MAX_PARTICLES);
+  var pGrav = new Float32Array(MAX_PARTICLES), pDrag = new Float32Array(MAX_PARTICLES);
+  var pR0 = new Uint8Array(MAX_PARTICLES), pG0 = new Uint8Array(MAX_PARTICLES), pB0 = new Uint8Array(MAX_PARTICLES);
+  var pR1 = new Uint8Array(MAX_PARTICLES), pG1 = new Uint8Array(MAX_PARTICLES), pB1 = new Uint8Array(MAX_PARTICLES);
+  var pBlend = new Uint8Array(MAX_PARTICLES);
+
   function spawnParticles(x, y, color, count, speedMax) {
-    var n = Math.min(80, Number(count) || 12);
-    var sm = Number(speedMax) || 180;
+    var o = isOptsObj(x) ? x : (isOptsObj(color) ? color : null);
+    var px0 = Number(o && x === o ? o.x : x) || 0;
+    var py0 = Number(o && x === o ? o.y : y) || 0;
+    var n = Math.min(1000, Number(o ? (o.count !== undefined ? o.count : 12) : count) || 12);
+    var sMin = o && o.speedMin !== undefined ? Number(o.speedMin) : 40;
+    var sMax = o ? Number(o.speedMax !== undefined ? o.speedMax : (o.speed !== undefined ? o.speed : 180)) : (Number(speedMax) || 180);
+    if (sMax < sMin) sMin = sMax * 0.25;
+    var baseAng = o && o.angle !== undefined ? Number(o.angle) : 0;
+    var spread = o && o.spread !== undefined ? Number(o.spread) : Math.PI * 2;
+    var grav = o && o.gravity !== undefined ? Number(o.gravity) : 0;
+    var drag = o && o.drag !== undefined ? Number(o.drag) : 0;
+    var szA = o && o.size !== undefined ? Number(o.size) : 4.5;
+    var szB = o && o.sizeEnd !== undefined ? Number(o.sizeEnd) : szA * 0.35;
+    var lMin = o && o.life !== undefined ? Number(o.life) * 0.75 : 0.35;
+    var lMax = o && o.life !== undefined ? Number(o.life) * 1.25 : 0.8;
+    var cA = parseColorRgba((o ? o.color : color) || '#fbbf24');
+    var cB = (o && o.colorEnd) ? parseColorRgba(o.colorEnd) : cA;
+    var isAdd = (o && (o.blend === 'lighter' || o.blend === 'add')) ? 1 : 0;
     for (var i = 0; i < n; i++) {
-      var ang = Math.random() * Math.PI * 2;
-      var spd = 40 + Math.random() * sm;
-      particlePool.push({
-        x: x, y: y,
-        vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
-        life: 0.35 + Math.random() * 0.45, maxLife: 0.8,
-        size: 2 + Math.random() * 3.5,
-        color: color || '#fbbf24'
+      if (pCount >= MAX_PARTICLES) break;
+      var idx = pCount++;
+      var ang = spread >= Math.PI * 1.99 ? Math.random() * Math.PI * 2 : (baseAng + (Math.random() - 0.5) * spread);
+      var spd = sMin + Math.random() * (sMax - sMin);
+      var lf = Math.max(0.05, lMin + Math.random() * (lMax - lMin));
+      pX[idx] = px0; pY[idx] = py0;
+      pVx[idx] = Math.cos(ang) * spd; pVy[idx] = Math.sin(ang) * spd;
+      pLife[idx] = lf; pMaxLife[idx] = lf;
+      pSz0[idx] = o && o.size !== undefined ? szA : (2 + Math.random() * 3.5);
+      pSz1[idx] = o && o.sizeEnd !== undefined ? szB : pSz0[idx] * 0.4;
+      pGrav[idx] = grav; pDrag[idx] = drag;
+      pR0[idx] = cA[0]; pG0[idx] = cA[1]; pB0[idx] = cA[2];
+      pR1[idx] = cB[0]; pG1[idx] = cB[1]; pB1[idx] = cB[2];
+      pBlend[idx] = isAdd;
+    }
+  }
+
+  // --- 2D Lighting & Raycast Shadows (Half-Res Lightmap) ---
+  var lightCanvas = document.createElement('canvas');
+  var lightCtx = lightCanvas.getContext('2d');
+  var lightState = { hasAmbient: false, ambientCol: '#020617', darkness: 0.72, lights: [], casters: [] };
+
+  function ambientLight(color, darkness) {
+    if (typeof color === 'number') {
+      lightState.hasAmbient = true;
+      lightState.ambientCol = '#020617';
+      lightState.darkness = Math.max(0, Math.min(1, color));
+    } else {
+      lightState.hasAmbient = true;
+      lightState.ambientCol = color || '#020617';
+      lightState.darkness = darkness === undefined ? 0.75 : Math.max(0, Math.min(1, Number(darkness)));
+    }
+  }
+  function light(x, y, radius, color, intensity) {
+    lightState.lights.push({ kind: 'radial', x: Number(x) || 0, y: Number(y) || 0, r: Math.max(8, Number(radius) || 140), color: color || '#ffffff', intensity: intensity === undefined ? 1 : Number(intensity) });
+  }
+  function shadowLight(x, y, radius, color, intensity) {
+    lightState.lights.push({ kind: 'shadow', x: Number(x) || 0, y: Number(y) || 0, r: Math.max(8, Number(radius) || 220), color: color || '#fde68a', intensity: intensity === undefined ? 1 : Number(intensity) });
+  }
+  function shadowCasters(obstacles) {
+    var segs = [];
+    var list = !obstacles ? [] : (Array.isArray(obstacles) ? obstacles : [obstacles]);
+    function addRectSegs(rx, ry, rw, rh) {
+      segs.push([rx, ry, rx + rw, ry], [rx + rw, ry, rx + rw, ry + rh], [rx + rw, ry + rh, rx, ry + rh], [rx, ry + rh, rx, ry]);
+    }
+    for (var i = 0; i < list.length; i++) {
+      var ob = list[i];
+      if (!ob || ob.alive === false) continue;
+      if (ob._isTilemap) {
+        var ts = ob.tileSize;
+        for (var gy = 0; gy < ob.rows; gy++) {
+          for (var gx = 0; gx < ob.cols; gx++) {
+            if (!ob._isSolidChar(ob.get(gx, gy))) continue;
+            var rx = gx * ts, ry = gy * ts;
+            if (gy === 0 || !ob._isSolidChar(ob.get(gx, gy - 1))) segs.push([rx, ry, rx + ts, ry]);
+            if (gx + 1 >= ob.cols || !ob._isSolidChar(ob.get(gx + 1, gy))) segs.push([rx + ts, ry, rx + ts, ry + ts]);
+            if (gy + 1 >= ob.rows || !ob._isSolidChar(ob.get(gx, gy + 1))) segs.push([rx + ts, ry + ts, rx, ry + ts]);
+            if (gx === 0 || !ob._isSolidChar(ob.get(gx - 1, gy))) segs.push([rx, ry + ts, rx, ry]);
+          }
+        }
+      } else if (Array.isArray(ob) && ob.length === 4) {
+        segs.push(ob);
+      } else if (ob.x1 !== undefined && ob.y2 !== undefined) {
+        segs.push([ob.x1, ob.y1, ob.x2, ob.y2]);
+      } else {
+        var bx = ob._shape === 'circle' ? ob.x - ob.r : (Number(ob.x) || 0);
+        var by = ob._shape === 'circle' ? ob.y - ob.r : (Number(ob.y) || 0);
+        var bw = ob._shape === 'circle' ? ob.r * 2 : (Number(ob.w) || 0);
+        var bh = ob._shape === 'circle' ? ob.r * 2 : (Number(ob.h) || 0);
+        if (bw > 0 && bh > 0) addRectSegs(bx, by, bw, bh);
+      }
+    }
+    lightState.casters = segs;
+  }
+
+  function renderLightOverlayToWorld(shakeOx, shakeOy) {
+    if (!lightState.hasAmbient && lightState.lights.length === 0) return;
+    var lw = Math.max(1, Math.round(W * 0.5)), lh = Math.max(1, Math.round(H * 0.5));
+    if (lightCanvas.width !== lw || lightCanvas.height !== lh) {
+      lightCanvas.width = lw; lightCanvas.height = lh;
+    }
+    lightCtx.save();
+    lightCtx.setTransform(1, 0, 0, 1, 0, 0);
+    if (lightState.hasAmbient) {
+      var ac = parseColorRgba(lightState.ambientCol);
+      var d = lightState.darkness;
+      var ar = Math.round(255 + (ac[0] - 255) * d);
+      var ag = Math.round(255 + (ac[1] - 255) * d);
+      var ab = Math.round(255 + (ac[2] - 255) * d);
+      lightCtx.fillStyle = 'rgb(' + ar + ',' + ag + ',' + ab + ')';
+      lightCtx.fillRect(0, 0, lw, lh);
+    } else {
+      lightCtx.clearRect(0, 0, lw, lh);
+    }
+    lightCtx.scale(0.5, 0.5);
+    if (frameCamTransform.active) {
+      lightCtx.translate(W / 2 + shakeOx, H / 2 + shakeOy);
+      lightCtx.scale(cam.zoom, cam.zoom);
+      lightCtx.translate(-W / 2 - cam.x, -H / 2 - cam.y);
+    }
+    lightCtx.globalCompositeOperation = 'lighter';
+    for (var li = 0; li < lightState.lights.length; li++) {
+      var L = lightState.lights[li];
+      var lc = parseColorRgba(L.color);
+      var inten = Math.max(0, Math.min(2, L.intensity));
+      var rC = Math.min(255, Math.round(lc[0] * inten));
+      var gC = Math.min(255, Math.round(lc[1] * inten));
+      var bC = Math.min(255, Math.round(lc[2] * inten));
+      lightCtx.save();
+      if (L.kind === 'shadow' && lightState.casters.length > 0) {
+        var near = [], angles = [];
+        var rPad = L.r * 1.45;
+        for (var si = 0; si < lightState.casters.length; si++) {
+          var sg = lightState.casters[si];
+          if ((sg[0] < L.x - rPad && sg[2] < L.x - rPad) || (sg[0] > L.x + rPad && sg[2] > L.x + rPad) ||
+              (sg[1] < L.y - rPad && sg[3] < L.y - rPad) || (sg[1] > L.y + rPad && sg[3] > L.y + rPad)) continue;
+          near.push(sg);
+          var a1 = Math.atan2(sg[1] - L.y, sg[0] - L.x);
+          var a2 = Math.atan2(sg[3] - L.y, sg[2] - L.x);
+          angles.push(a1 - 0.0003, a1, a1 + 0.0003, a2 - 0.0003, a2, a2 + 0.0003);
+        }
+        for (var ba = 0; ba < 16; ba++) angles.push(-Math.PI + (ba * Math.PI * 2) / 16);
+        angles.sort(function(a, b) { return a - b; });
+        lightCtx.beginPath();
+        for (var ai = 0; ai < angles.length; ai++) {
+          var ang = angles[ai];
+          var rdx = Math.cos(ang), rdy = Math.sin(ang);
+          var bestT = L.r;
+          for (var nj = 0; nj < near.length; nj++) {
+            var s = near[nj];
+            var sdx = s[2] - s[0], sdy = s[3] - s[1];
+            var denom = rdx * sdy - rdy * sdx;
+            if (Math.abs(denom) < 1e-7) continue;
+            var qpx = s[0] - L.x, qpy = s[1] - L.y;
+            var tRay = (qpx * sdy - qpy * sdx) / denom;
+            if (tRay < 0 || tRay >= bestT) continue;
+            var uSeg = (qpx * rdy - qpy * rdx) / denom;
+            if (uSeg >= 0 && uSeg <= 1) bestT = tRay;
+          }
+          var hx = L.x + rdx * bestT, hy = L.y + rdy * bestT;
+          if (ai === 0) lightCtx.moveTo(hx, hy); else lightCtx.lineTo(hx, hy);
+        }
+        lightCtx.closePath();
+        lightCtx.clip();
+      }
+      var grad = lightCtx.createRadialGradient(L.x, L.y, 0, L.x, L.y, L.r);
+      grad.addColorStop(0, 'rgba(' + rC + ',' + gC + ',' + bC + ',' + Math.min(1, inten) + ')');
+      grad.addColorStop(0.55, 'rgba(' + rC + ',' + gC + ',' + bC + ',' + (Math.min(1, inten) * 0.35) + ')');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      lightCtx.fillStyle = grad;
+      lightCtx.beginPath();
+      lightCtx.arc(L.x, L.y, L.r, 0, Math.PI * 2);
+      lightCtx.fill();
+      lightCtx.restore();
+    }
+    lightCtx.restore();
+
+    worldCtx.save();
+    worldCtx.setTransform(1, 0, 0, 1, 0, 0);
+    if (lightState.hasAmbient) {
+      worldCtx.globalCompositeOperation = 'multiply';
+      worldCtx.drawImage(lightCanvas, 0, 0, lw, lh, 0, 0, worldCanvas.width, worldCanvas.height);
+    } else {
+      worldCtx.globalCompositeOperation = 'lighter';
+      worldCtx.globalAlpha = 0.55;
+      worldCtx.drawImage(lightCanvas, 0, 0, lw, lh, 0, 0, worldCanvas.width, worldCanvas.height);
+    }
+    worldCtx.restore();
+    lightState.hasAmbient = false;
+    lightState.lights.length = 0;
+  }
+
+  // --- Hybrid WebGL2 Post-FX Pipeline (+ 1/4-res 2-Pass Bloom & Custom Shaders) ---
+  var fxState = { enabled: false, bloom: 0, vignette: 0, chromatic: 0, wave: 0, blur: 0, contrast: 1, saturation: 1, crt: 0, customGlsl: '', customUniforms: {} };
+  var glCanvas = null, gl = null, glLost = false, glRes = null;
+
+  function fx(opts) {
+    if (opts === false || opts === null) { fxState.enabled = false; return; }
+    if (opts === true) { fxState.enabled = true; return; }
+    if (!opts || typeof opts !== 'object') return;
+    fxState.enabled = true;
+    if (opts.bloom !== undefined) fxState.bloom = Math.max(0, Math.min(2.5, Number(opts.bloom) || 0));
+    if (opts.vignette !== undefined) fxState.vignette = Math.max(0, Math.min(1, Number(opts.vignette) || 0));
+    if (opts.chromatic !== undefined) fxState.chromatic = Math.max(0, Math.min(10, Number(opts.chromatic) || 0));
+    if (opts.wave !== undefined) fxState.wave = Math.max(0, Math.min(20, Number(opts.wave) || 0));
+    if (opts.blur !== undefined) fxState.blur = Math.max(0, Math.min(10, Number(opts.blur) || 0));
+    if (opts.contrast !== undefined) fxState.contrast = Math.max(0.2, Math.min(2.5, Number(opts.contrast) || 1));
+    if (opts.saturation !== undefined) fxState.saturation = Math.max(0, Math.min(2.5, Number(opts.saturation) || 1));
+    if (opts.crt !== undefined) fxState.crt = Math.max(0, Math.min(1, Number(opts.crt) || 0));
+  }
+  function setShader(glslCode, uniforms) {
+    if (glslCode === null || glslCode === false) {
+      fxState.customGlsl = '';
+      if (glRes && glRes.customProg && gl) { gl.deleteProgram(glRes.customProg); glRes.customProg = null; }
+      return;
+    }
+    var nextCode = String(glslCode || '');
+    if (nextCode !== fxState.customGlsl) {
+      fxState.customGlsl = nextCode;
+      if (glRes) glRes.customSrcDirty = true;
+    }
+    fxState.customUniforms = (uniforms && typeof uniforms === 'object') ? uniforms : {};
+    if (nextCode) fxState.enabled = true;
+  }
+
+  function compileGlProgram(ctxGl, vsSrc, fsSrc) {
+    function makeSh(type, src) {
+      var s = ctxGl.createShader(type);
+      ctxGl.shaderSource(s, src);
+      ctxGl.compileShader(s);
+      if (!ctxGl.getShaderParameter(s, ctxGl.COMPILE_STATUS)) {
+        var log = ctxGl.getShaderInfoLog(s) || 'Shader error';
+        ctxGl.deleteShader(s);
+        throw new Error(log);
+      }
+      return s;
+    }
+    var vs = makeSh(ctxGl.VERTEX_SHADER, vsSrc);
+    var fs = makeSh(ctxGl.FRAGMENT_SHADER, fsSrc);
+    var p = ctxGl.createProgram();
+    ctxGl.attachShader(p, vs); ctxGl.attachShader(p, fs);
+    ctxGl.linkProgram(p);
+    ctxGl.deleteShader(vs); ctxGl.deleteShader(fs);
+    if (!ctxGl.getProgramParameter(p, ctxGl.LINK_STATUS)) {
+      var err = ctxGl.getProgramInfoLog(p) || 'Link error';
+      ctxGl.deleteProgram(p);
+      throw new Error(err);
+    }
+    return p;
+  }
+
+  function ensureWebGLPostFx() {
+    if (glLost) return false;
+    if (!glCanvas) {
+      glCanvas = document.createElement('canvas');
+      gl = glCanvas.getContext('webgl2', { alpha: true, premultipliedAlpha: false, antialias: false });
+      if (!gl) return false;
+      glCanvas.addEventListener('webglcontextlost', function(e) { e.preventDefault(); glLost = true; glRes = null; });
+      glCanvas.addEventListener('webglcontextrestored', function() { glLost = false; glRes = null; });
+    }
+    var cw = worldCanvas.width || 1, ch = worldCanvas.height || 1;
+    if (glCanvas.width !== cw || glCanvas.height !== ch) { glCanvas.width = cw; glCanvas.height = ch; }
+    if (!glRes) {
+      try {
+        var vsQuad = '#version 300 es\\nconst vec2 P[4]=vec2[](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(1,1));out vec2 v_uv;void main(){vec2 p=P[gl_VertexID];v_uv=p*0.5+0.5;gl_Position=vec4(p,0.0,1.0);}';
+        var fsExtract = '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex;in vec2 v_uv;out vec4 o;void main(){vec4 c=texture(u_tex,v_uv);float br=max(c.r,max(c.g,c.b));float k=smoothstep(0.55,0.95,br);o=vec4(c.rgb*k,1.0);}';
+        var fsBlur = '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex;uniform vec2 u_dir;in vec2 v_uv;out vec4 o;void main(){vec3 s=texture(u_tex,v_uv).rgb*0.227;s+=texture(u_tex,v_uv+u_dir*1.38).rgb*0.194;s+=texture(u_tex,v_uv-u_dir*1.38).rgb*0.194;s+=texture(u_tex,v_uv+u_dir*3.23).rgb*0.070;s+=texture(u_tex,v_uv-u_dir*3.23).rgb*0.070;o=vec4(s,1.0);}';
+        var fsMain = '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex,u_bloomTex;uniform vec2 u_resolution;uniform float u_time,u_bloom,u_vignette,u_chromatic,u_wave,u_blur,u_contrast,u_saturation,u_crt;in vec2 v_uv;out vec4 o;void main(){vec2 uv=v_uv;if(u_wave>0.0){uv.x+=sin(uv.y*28.0+u_time*4.5)*(u_wave*0.0012);uv.y+=cos(uv.x*22.0+u_time*3.8)*(u_wave*0.0008);}vec2 px=1.0/max(u_resolution,vec2(1.0));vec4 base=texture(u_tex,uv);if(u_chromatic>0.0){float sh=u_chromatic*px.x*2.0;base.r=texture(u_tex,uv+vec2(sh,0.0)).r;base.b=texture(u_tex,uv-vec2(sh,0.0)).b;}if(u_blur>0.0){vec2 b=u_blur*px*1.4;base.rgb=(base.rgb+texture(u_tex,uv+vec2(b.x,0.0)).rgb+texture(u_tex,uv-vec2(b.x,0.0)).rgb+texture(u_tex,uv+vec2(0.0,b.y)).rgb+texture(u_tex,uv-vec2(0.0,b.y)).rgb)*0.2;}vec3 col=base.rgb;if(u_bloom>0.0){col+=texture(u_bloomTex,uv).rgb*u_bloom;}col=(col-0.5)*u_contrast+0.5;float lum=dot(col,vec3(0.299,0.587,0.114));col=mix(vec3(lum),col,u_saturation);if(u_crt>0.0){float sc=0.88+0.12*sin(uv.y*u_resolution.y*1.6);col*=mix(1.0,sc,u_crt);}if(u_vignette>0.0){float d=distance(uv,vec2(0.5));col*=mix(1.0,smoothstep(0.95,0.28,d),u_vignette);}o=vec4(clamp(col,0.0,1.0),base.a);}';
+        var makeTex = function() {
+          var t = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, t);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          return t;
+        };
+        glRes = {
+          vsQuad: vsQuad,
+          pExtract: compileGlProgram(gl, vsQuad, fsExtract),
+          pBlur: compileGlProgram(gl, vsQuad, fsBlur),
+          pMain: compileGlProgram(gl, vsQuad, fsMain),
+          customProg: null, customSrcDirty: false,
+          srcTex: makeTex(),
+          bTexA: makeTex(), bFboA: gl.createFramebuffer(),
+          bTexB: makeTex(), bFboB: gl.createFramebuffer(),
+          bw: 0, bh: 0,
+          vao: gl.createVertexArray()
+        };
+      } catch(err) {
+        emitConsole('error', 'WebGL2 Post-FX отключён: ' + err.message);
+        glLost = true;
+        return false;
+      }
+    }
+    var bw = Math.max(2, Math.floor(cw / 4)), bh = Math.max(2, Math.floor(ch / 4));
+    if (glRes.bw !== bw || glRes.bh !== bh) {
+      glRes.bw = bw; glRes.bh = bh;
+      gl.bindTexture(gl.TEXTURE_2D, glRes.bTexA);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, bw, bh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, glRes.bFboA);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, glRes.bTexA, 0);
+      gl.bindTexture(gl.TEXTURE_2D, glRes.bTexB);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, bw, bh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, glRes.bFboB);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, glRes.bTexB, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    if (fxState.customGlsl && glRes.customSrcDirty) {
+      glRes.customSrcDirty = false;
+      if (glRes.customProg) { gl.deleteProgram(glRes.customProg); glRes.customProg = null; }
+      try {
+        var rawSh = fxState.customGlsl;
+        var fsCustom = rawSh.indexOf('#version') >= 0
+          ? rawSh
+          : '#version 300 es\\nprecision mediump float;uniform sampler2D u_tex;uniform vec2 u_resolution;uniform float u_time;in vec2 v_uv;out vec4 outColor;' +
+            (rawSh.indexOf('void main') >= 0 ? rawSh : ('vec4 effect(sampler2D tex,vec2 uv,float time){\\n' + rawSh + '\\n}\\nvoid main(){outColor=effect(u_tex,v_uv,u_time);}'));
+        glRes.customProg = compileGlProgram(gl, glRes.vsQuad, fsCustom);
+      } catch(shErr) {
+        emitConsole('error', 'Ошибка GLSL шейдера: ' + shErr.message);
+        fxState.customGlsl = '';
+      }
+    }
+    return true;
+  }
+
+  function runWebGLPostFx() {
+    if (!fxState.enabled || !ensureWebGLPostFx()) return false;
+    var cw = glCanvas.width, ch = glCanvas.height;
+    gl.bindVertexArray(glRes.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, glRes.srcTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, worldCanvas);
+
+    if (fxState.bloom > 0) {
+      gl.viewport(0, 0, glRes.bw, glRes.bh);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, glRes.bFboA);
+      gl.useProgram(glRes.pExtract);
+      gl.uniform1i(gl.getUniformLocation(glRes.pExtract, 'u_tex'), 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      gl.useProgram(glRes.pBlur);
+      gl.uniform1i(gl.getUniformLocation(glRes.pBlur, 'u_tex'), 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, glRes.bFboB);
+      gl.bindTexture(gl.TEXTURE_2D, glRes.bTexA);
+      gl.uniform2f(gl.getUniformLocation(glRes.pBlur, 'u_dir'), 1.5 / glRes.bw, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, glRes.bFboA);
+      gl.bindTexture(gl.TEXTURE_2D, glRes.bTexB);
+      gl.uniform2f(gl.getUniformLocation(glRes.pBlur, 'u_dir'), 0, 1.5 / glRes.bh);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, cw, ch);
+    var activeProg = (fxState.customGlsl && glRes.customProg) ? glRes.customProg : glRes.pMain;
+    gl.useProgram(activeProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, glRes.srcTex);
+    gl.uniform1i(gl.getUniformLocation(activeProg, 'u_tex'), 0);
+    var locRes = gl.getUniformLocation(activeProg, 'u_resolution');
+    if (locRes) gl.uniform2f(locRes, W, H);
+    var locT = gl.getUniformLocation(activeProg, 'u_time');
+    if (locT) gl.uniform1f(locT, gameTime);
+    if (activeProg === glRes.pMain) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, glRes.bTexA);
+      gl.uniform1i(gl.getUniformLocation(activeProg, 'u_bloomTex'), 1);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_bloom'), fxState.bloom);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_vignette'), fxState.vignette);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_chromatic'), fxState.chromatic);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_wave'), fxState.wave);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_blur'), fxState.blur);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_contrast'), fxState.contrast);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_saturation'), fxState.saturation);
+      gl.uniform1f(gl.getUniformLocation(activeProg, 'u_crt'), fxState.crt);
+    } else if (fxState.customUniforms) {
+      Object.keys(fxState.customUniforms).forEach(function(uk) {
+        var loc = gl.getUniformLocation(activeProg, uk);
+        if (!loc) return;
+        var uv = fxState.customUniforms[uk];
+        if (Array.isArray(uv) && uv.length >= 2) gl.uniform2f(loc, Number(uv[0]) || 0, Number(uv[1]) || 0);
+        else gl.uniform1f(loc, Number(uv) || 0);
       });
     }
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    return true;
   }
 
   var EASING = {
@@ -2923,29 +3917,68 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       tweens.push({
         obj: obj, prop: prop, from: fromVal, to: Number(toVal) || 0,
         t: 0, dur: durSec, ease: EASING[easeName || 'easeOut'] || EASING.easeOut,
+        scene: currentScene,
         resolve: resolve
       });
     });
   }
 
-  function gotoScene(nextName, payload) {
-    var nxt = String(nextName || 'main');
+  function regSceneName(name) {
+    var nm = String(name || '');
+    if (nm && registeredScenes.indexOf(nm) < 0) registeredScenes.push(nm);
+  }
+
+  var inSceneScope = false;
+
+  function applySceneSwitchNow(nxt, payload) {
     var old = currentScene;
-    if (old !== nxt && sceneHooks['exit:' + old]) {
-      sceneHooks['exit:' + old].forEach(function(fn) {
-        loopCounter = 0;
-        Promise.resolve(fn(payload)).catch(handleHookError);
+    regSceneName(nxt);
+    if (old !== nxt) {
+      timers = timers.filter(function(t) { return t.scene !== old; });
+      afterTimers = afterTimers.filter(function(t) { return t.scene !== old; });
+      tweens = tweens.filter(function(tw) {
+        if (tw.scene === old) { try { tw.resolve(tw.obj); } catch(e) {} return false; }
+        return true;
       });
+      if (sceneHooks['exit:' + old]) {
+        sceneHooks['exit:' + old].forEach(function(fn) {
+          __rt._loopTicks = 0;
+          Promise.resolve(fn(payload)).catch(handleHookError);
+        });
+      }
     }
     currentScene = nxt;
     sceneTime = 0;
     sceneFrame = 0;
     if (sceneHooks['enter:' + nxt]) {
-      sceneHooks['enter:' + nxt].forEach(function(fn) {
-        loopCounter = 0;
-        Promise.resolve(fn(payload)).catch(handleHookError);
-      });
+      inSceneScope = true;
+      try {
+        sceneHooks['enter:' + nxt].forEach(function(fn) {
+          __rt._loopTicks = 0;
+          Promise.resolve(fn(payload)).catch(handleHookError);
+        });
+      } finally { inSceneScope = false; }
     }
+  }
+
+  function gotoScene(nextName, payload, opts) {
+    var nxt = String(nextName || 'main');
+    var trOpts = isOptsObj(payload) && opts === undefined && (payload.transition || payload.dur || payload.color) ? payload : opts;
+    var actualPayload = trOpts === payload ? undefined : payload;
+    if (isOptsObj(trOpts) && trOpts.transition) {
+      var rawD = Number(trOpts.dur !== undefined ? trOpts.dur : (trOpts.duration || 400));
+      var dSec = Math.max(0.08, rawD > 10 ? rawD / 1000 : rawD);
+      transitionState.active = true;
+      transitionState.kind = String(trOpts.transition || 'fade').toLowerCase();
+      transitionState.color = trOpts.color || '#000000';
+      transitionState.dur = dSec;
+      transitionState.elapsed = 0;
+      transitionState.switched = false;
+      transitionState.target = nxt;
+      transitionState.payload = actualPayload;
+      return;
+    }
+    applySceneSwitchNow(nxt, actualPayload);
   }
 
   function drawEntitiesNow(filterTag) {
@@ -2976,7 +4009,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     get fps() { return currentFps; },
     clear: function(c) {
       ctx.save();
-      if (ctx === rootCtx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      if (ctx === frameBaseCtx || ctx === rootCtx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       ctx.fillStyle = c || gameObj.bg;
       ctx.fillRect(0, 0, W, H);
       ctx.restore();
@@ -2994,6 +4027,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var __rt = {
     _assets: {},
     _loc: '',
+    _loopTicks: 0,
+    _regScene: regSceneName,
     BaseEntity: BaseEntity,
     spawn: function(ent) {
       if (ent && typeof ent === 'object') {
@@ -3017,8 +4052,14 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
         hooks[ev].push(fn);
       }
     },
-    every: function(ms, fn) { timers.push({ interval: Math.max(0.016, (Number(ms) || 1000) / 1000), acc: 0, fn: fn }); },
-    after: function(ms, fn) { afterTimers.push({ rem: Math.max(0.001, (Number(ms) || 0) / 1000), fn: fn }); },
+    every: function(ms, fn) {
+      var owner = (inSceneScope || currentScene !== 'main' || registeredScenes.length <= 1) ? currentScene : null;
+      timers.push({ interval: Math.max(0.016, (Number(ms) || 1000) / 1000), acc: 0, fn: fn, scene: owner });
+    },
+    after: function(ms, fn) {
+      var owner = (inSceneScope || currentScene !== 'main' || registeredScenes.length <= 1) ? currentScene : null;
+      afterTimers.push({ rem: Math.max(0.001, (Number(ms) || 0) / 1000), fn: fn, scene: owner });
+    },
     wait: function(ms) { return new Promise(function(res){ setTimeout(res, Math.max(0, Number(ms) || 0)); }); },
     loadImage: function(p) { return loadImageAsset(p); },
     loadSound: function(p) { return loadSoundAsset(p); },
@@ -3026,6 +4067,8 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     tilemap: tilemap,
     moveAndCollide: moveAndCollide,
     raycast: raycast,
+    bounceCircle: bounceCircle,
+    spatialQuery: spatialQuery,
     button: button,
     panel: panel,
     scrollBegin: scrollBegin,
@@ -3051,11 +4094,39 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     setGamepad: function(opts) {
       try {
         var payload = typeof opts === 'boolean' ? { visible: opts } : (opts || {});
-        window.parent.postMessage({ type: 'roy-gamepad-config', visible: payload.visible, wasd: payload.wasd, extras: payload.extras }, '*');
+        window.parent.postMessage({ type: 'roy-gamepad-config', visible: payload.visible, wasd: payload.wasd, extras: payload.extras, stick: payload.stick }, '*');
       } catch(e) {}
     },
+    vibrate: function(ms) {
+      try { if (navigator && typeof navigator.vibrate === 'function') navigator.vibrate(ms || 30); } catch(e) {}
+    },
     freezeFrame: function(ms) { var d = Number(ms) || 60; freezeRem = Math.max(freezeRem, d > 10 ? d / 1000 : d); },
+    hitStop: function(ms) { var d = Number(ms) || 60; freezeRem = Math.max(freezeRem, d > 10 ? d / 1000 : d); },
     flashScreen: function(col, ms) { var d = Number(ms) || 180; flashState.color = col || '#ffffff'; flashState.dur = d > 10 ? d / 1000 : d; flashState.rem = flashState.dur; },
+    timeScale: function(s) {
+      if (s === undefined) return gameplayTimeScale;
+      gameplayTimeScale = Math.max(0, Math.min(4, Number(s)));
+      return gameplayTimeScale;
+    },
+    fx: fx,
+    setShader: setShader,
+    ambientLight: ambientLight,
+    light: light,
+    shadowLight: shadowLight,
+    shadowCasters: shadowCasters,
+    setBlend: function(mode) { ctx.globalCompositeOperation = mode || 'source-over'; },
+    setShadow: function(blur, col, ox, oy) {
+      ctx.shadowBlur = Number(blur) || 0;
+      ctx.shadowColor = col || 'rgba(0,0,0,0.6)';
+      ctx.shadowOffsetX = Number(ox) || 0;
+      ctx.shadowOffsetY = Number(oy) || 0;
+    },
+    resetShadow: function() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; },
+    drawTrail: drawTrail,
+    debug: function(flag) {
+      debugOverlay = flag === undefined ? !debugOverlay : !!flag;
+      return debugOverlay;
+    },
     scene: sceneObj,
     goto: gotoScene,
     tween: addTween,
@@ -3102,10 +4173,11 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     textWrap: textWrap,
     measureText: measureTextBox,
     glow: function(col, blur) { ctx.shadowColor = col || '#38bdf8'; ctx.shadowBlur = Number(blur) || 14; },
-    resetGlow: function() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; },
+    resetGlow: function() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; },
     alpha: function(a) { ctx.globalAlpha = Math.max(0, Math.min(1, Number(a))); },
     blend: function(mode) { ctx.globalCompositeOperation = mode || 'source-over'; },
     particles: spawnParticles,
+    emitParticles: spawnParticles,
     camera: function(x, y, zoom) { cam.x = Number(x) || 0; cam.y = Number(y) || 0; cam.zoom = Number(zoom) || 1; cam.followTarget = null; },
     cameraFollow: function(target, smooth) { cam.followTarget = target || null; if (smooth !== undefined) cam.followSmooth = Number(smooth) || 8; },
     cameraBounds: function(minX, minY, maxX, maxY) {
@@ -3120,11 +4192,15 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       if (d === 'x' || d === 'horizontal' || d === 'h') {
         var l = keysDown['ArrowLeft'] || keysDown['KeyA'] || keysDown['a'];
         var r = keysDown['ArrowRight'] || keysDown['KeyD'] || keysDown['d'];
-        return (r ? 1 : 0) - (l ? 1 : 0);
+        var kv = (r ? 1 : 0) - (l ? 1 : 0);
+        if (kv !== 0) return kv;
+        return (virtualAxis.active && Math.abs(virtualAxis.x) > 0.02) ? virtualAxis.x : 0;
       }
       var u = keysDown['ArrowUp'] || keysDown['KeyW'] || keysDown['w'];
       var dn = keysDown['ArrowDown'] || keysDown['KeyS'] || keysDown['s'];
-      return (dn ? 1 : 0) - (u ? 1 : 0);
+      var ky = (dn ? 1 : 0) - (u ? 1 : 0);
+      if (ky !== 0) return ky;
+      return (virtualAxis.active && Math.abs(virtualAxis.y) > 0.02) ? virtualAxis.y : 0;
     },
     sfx: sfx,
     tone: tone,
@@ -3147,15 +4223,25 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       for (var i = a; st > 0 ? i < b : i > b; i += st) { out.push(i); if (out.length > 50000) break; }
       return out;
     },
-    sin: Math.sin, cos: Math.cos, atan2: Math.atan2, sqrt: Math.sqrt, pow: Math.pow,
-    floor: Math.floor, ceil: Math.ceil, round: Math.round,
+    sin: Math.sin, cos: Math.cos, tan: Math.tan, asin: Math.asin, acos: Math.acos, atan: Math.atan, atan2: Math.atan2,
+    sqrt: Math.sqrt, pow: Math.pow, floor: Math.floor, ceil: Math.ceil, round: Math.round,
+    log10: Math.log10, exp: Math.exp, PI: Math.PI, TAU: Math.PI * 2,
+    noise2d: noise2d, fbm: fbm, hsl: hsl, lerpColor: lerpColor,
     roundTo: function(v, d) { var f = Math.pow(10, Number(d) || 0); return Math.round((Number(v) || 0) * f) / f; },
     fmtNum: function(v) { return Math.round(Number(v) || 0).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' '); },
     int: function(v) { return parseInt(v, 10) || 0; },
     float: function(v) { return parseFloat(v) || 0; },
+    num: function(v) { return Number(v) || 0; },
+    bool: function(v) { return Boolean(v); },
     str: function(v) { return String(v === undefined || v === null ? '' : v); },
     rand: function(a, b) { if (b === undefined) { b = a === undefined ? 1 : a; a = 0; } return a + Math.random() * (b - a); },
     randInt: function(a, b) { if (b === undefined) { b = a; a = 0; } return Math.floor(a + Math.random() * (b - a + 1)); },
+    random: function(a, b) {
+      if (a === undefined) return Math.random();
+      if (b === undefined) return Math.random() * Number(a);
+      var lo = Number(a) || 0, hi = Number(b) || 0;
+      return lo + Math.random() * (hi - lo);
+    },
     choose: function(arr) { return Array.isArray(arr) && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null; },
     len: function(v) { if (Array.isArray(v) || typeof v === 'string') return v.length; if (v && typeof v === 'object') return Object.keys(v).length; return 0; },
     push: function(arr, v) { if (Array.isArray(arr)) arr.push(v); return arr; },
@@ -3206,29 +4292,41 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
   window.addEventListener('message', function(e) {
     var d = e && e.data;
-    if (!d || d.type !== 'roy-virtual-key') return;
+    if (!d) return;
+    if (d.type === 'roy-virtual-axis') {
+      virtualAxis.x = Math.max(-1, Math.min(1, Number(d.x) || 0));
+      virtualAxis.y = Math.max(-1, Math.min(1, Number(d.y) || 0));
+      virtualAxis.active = !!d.active;
+      return;
+    }
+    if (d.type !== 'roy-virtual-key') return;
     var code = String(d.code || '');
     var k = String(d.key || code);
     if (d.pressed) {
       if (!keysDown[code]) { keysJustPressed[code] = true; keysJustPressed[k.toLowerCase()] = true; }
       keysDown[code] = true; keysDown[k] = true; keysDown[k.toLowerCase()] = true;
-      hooks.keydown.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(k)).catch(handleHookError); });
+      hooks.keydown.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(k)).catch(handleHookError); });
     } else {
       delete keysDown[code]; delete keysDown[k]; delete keysDown[k.toLowerCase()];
-      hooks.keyup.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(k)).catch(handleHookError); });
+      hooks.keyup.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(k)).catch(handleHookError); });
     }
   });
 
   window.addEventListener('keydown', function(e) {
+    if (e.key === 'F3' || e.code === 'F3') {
+      e.preventDefault();
+      debugOverlay = !debugOverlay;
+      return;
+    }
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space',' '].indexOf(e.key) >= 0) e.preventDefault();
     if (!keysDown[e.code]) { keysJustPressed[e.code] = true; keysJustPressed[e.key.toLowerCase()] = true; }
     keysDown[e.code] = true; keysDown[e.key] = true; keysDown[e.key.toLowerCase()] = true;
-    hooks.keydown.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(e.key)).catch(handleHookError); });
+    hooks.keydown.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(e.key)).catch(handleHookError); });
   });
 
   window.addEventListener('keyup', function(e) {
     delete keysDown[e.code]; delete keysDown[e.key]; delete keysDown[e.key.toLowerCase()];
-    hooks.keyup.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(e.key)).catch(handleHookError); });
+    hooks.keyup.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(e.key)).catch(handleHookError); });
   });
 
   canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
@@ -3236,16 +4334,25 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   canvas.addEventListener('mousemove', function(e) {
     var p = canvasCoords(e);
     mouse.x = p.x; mouse.y = p.y; mouse.rx = p.rx; mouse.ry = p.ry; mouse.wx = p.wx; mouse.wy = p.wy;
-    hooks.pointermove.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(p.x, p.y)).catch(handleHookError); });
+    hooks.pointermove.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(p.x, p.y)).catch(handleHookError); });
   });
 
   canvas.addEventListener('mousedown', function(e) {
     var p = canvasCoords(e);
     mouse.x = p.x; mouse.y = p.y; mouse.rx = p.rx; mouse.ry = p.ry; mouse.wx = p.wx; mouse.wy = p.wy;
+    if (debugOverlay && e.button === 0 && debugSceneRects.length > 0) {
+      for (var dsi = 0; dsi < debugSceneRects.length; dsi++) {
+        var sr = debugSceneRects[dsi];
+        if (p.x >= sr.x && p.x <= sr.x + sr.w && p.y >= sr.y && p.y <= sr.y + sr.h) {
+          gotoScene(sr.name);
+          return;
+        }
+      }
+    }
     if (e.button === 2) { mouse.rightDown = true; mouse.rightClicked = true; }
     else if (e.button === 1) { mouse.middleDown = true; }
     else { mouse.down = true; mouse.clicked = true; }
-    hooks.click.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(p.x, p.y, e.button)).catch(handleHookError); });
+    hooks.click.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(p.x, p.y, e.button)).catch(handleHookError); });
   });
 
   window.addEventListener('mouseup', function(e) {
@@ -3262,7 +4369,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       mouse.x = t0.x; mouse.y = t0.y; mouse.rx = t0.wx; mouse.ry = t0.wy; mouse.wx = t0.wx; mouse.wy = t0.wy;
       if (e.touches.length === 1) {
         mouse.down = true; mouse.clicked = true;
-        hooks.click.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(t0.x, t0.y, 0)).catch(handleHookError); });
+        hooks.click.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(t0.x, t0.y, 0)).catch(handleHookError); });
       }
     }
   }, { passive: false });
@@ -3273,7 +4380,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     if (touches.length > 0) {
       var t0 = touches[0];
       mouse.x = t0.x; mouse.y = t0.y; mouse.rx = t0.wx; mouse.ry = t0.wy; mouse.wx = t0.wx; mouse.wy = t0.wy;
-      hooks.pointermove.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(t0.x, t0.y)).catch(handleHookError); });
+      hooks.pointermove.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(t0.x, t0.y)).catch(handleHookError); });
     }
   }, { passive: false });
 
@@ -3292,8 +4399,86 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
     mouse.wheel = e.deltaY;
-    hooks.wheel.forEach(function(fn) { loopCounter = 0; Promise.resolve(fn(e.deltaY)).catch(handleHookError); });
+    hooks.wheel.forEach(function(fn) { __rt._loopTicks = 0; Promise.resolve(fn(e.deltaY)).catch(handleHookError); });
   }, { passive: false });
+
+  function renderDebugOverlay() {
+    debugSceneRects.length = 0;
+    if (!debugOverlay) return;
+    // Hitboxes in world space
+    rootCtx.save();
+    rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (frameCamTransform.active) {
+      rootCtx.translate(W / 2 + frameCamTransform.ox, H / 2 + frameCamTransform.oy);
+      rootCtx.scale(cam.zoom, cam.zoom);
+      rootCtx.translate(-W / 2 - cam.x, -H / 2 - cam.y);
+    }
+    rootCtx.lineWidth = 1.25 / (cam.zoom || 1);
+    for (var ei = 0; ei < worldEntities.length; ei++) {
+      var ent = worldEntities[ei];
+      if (!ent || ent.alive === false) continue;
+      rootCtx.strokeStyle = 'rgba(56,189,248,0.85)';
+      if (ent._shape === 'circle' || (ent.r !== undefined && !ent.w)) {
+        var cr = Number(ent.r) || 12;
+        rootCtx.beginPath();
+        rootCtx.arc(Number(ent.x) || 0, Number(ent.y) || 0, cr, 0, Math.PI * 2);
+        rootCtx.stroke();
+      } else {
+        rootCtx.strokeRect(Number(ent.x) || 0, Number(ent.y) || 0, Number(ent.w) || 16, Number(ent.h) || 16);
+      }
+      if (ent.tag) {
+        rootCtx.fillStyle = 'rgba(186,230,253,0.9)';
+        rootCtx.font = '600 ' + Math.round(10 / (cam.zoom || 1)) + 'px monospace';
+        rootCtx.fillText(String(ent.tag), Number(ent.x) || 0, (Number(ent.y) || 0) - 3);
+      }
+    }
+    rootCtx.restore();
+
+    // Screen-space telemetry + scene switcher HUD (top-right)
+    rootCtx.save();
+    rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    var pw = 232;
+    var scenesList = registeredScenes.length ? registeredScenes : [currentScene];
+    var ph = 112 + scenesList.length * 22;
+    var px = W - pw - 10, py = 10;
+    rootCtx.fillStyle = 'rgba(2, 6, 23, 0.86)';
+    rootCtx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+    rootCtx.lineWidth = 1;
+    if (rootCtx.roundRect) { rootCtx.beginPath(); rootCtx.roundRect(px, py, pw, ph, 8); rootCtx.fill(); rootCtx.stroke(); }
+    else { rootCtx.fillRect(px, py, pw, ph); rootCtx.strokeRect(px, py, pw, ph); }
+
+    rootCtx.font = '700 11px monospace';
+    rootCtx.textBaseline = 'top';
+    rootCtx.textAlign = 'left';
+    rootCtx.fillStyle = '#38bdf8';
+    rootCtx.fillText('ROY DEBUG [F3]', px + 10, py + 8);
+    rootCtx.font = '500 11px monospace';
+    rootCtx.fillStyle = '#e2e8f0';
+    var loopPct = Math.min(100, Math.round((lastLoopTicks / 1000000) * 100));
+    rootCtx.fillText('FPS: ' + currentFps + '   Scale: ' + gameplayTimeScale.toFixed(2) + 'x', px + 10, py + 26);
+    rootCtx.fillText('Entities: ' + worldEntities.length + '   Particles: ' + pCount, px + 10, py + 42);
+    rootCtx.fillStyle = loopPct > 70 ? '#f87171' : '#94a3b8';
+    rootCtx.fillText('LoopTicks: ' + loopPct + '% (' + lastLoopTicks + ')', px + 10, py + 58);
+    rootCtx.fillStyle = fxState.enabled ? (glLost ? '#fbbf24' : '#34d399') : '#94a3b8';
+    rootCtx.fillText('PostFX: ' + (fxState.enabled ? (glLost ? '2D Fallback' : 'WebGL2 ON') : 'OFF'), px + 10, py + 74);
+    rootCtx.fillStyle = '#94a3b8';
+    rootCtx.fillText('Scenes (' + currentScene + '):', px + 10, py + 92);
+
+    for (var si = 0; si < scenesList.length; si++) {
+      var scName = scenesList[si];
+      var by = py + 110 + si * 22;
+      var bx = px + 10, bw = pw - 20, bh = 18;
+      var isAct = scName === currentScene;
+      rootCtx.fillStyle = isAct ? 'rgba(56,189,248,0.28)' : 'rgba(30,41,59,0.75)';
+      rootCtx.strokeStyle = isAct ? '#38bdf8' : 'rgba(148,163,184,0.35)';
+      if (rootCtx.roundRect) { rootCtx.beginPath(); rootCtx.roundRect(bx, by, bw, bh, 4); rootCtx.fill(); rootCtx.stroke(); }
+      else { rootCtx.fillRect(bx, by, bw, bh); rootCtx.strokeRect(bx, by, bw, bh); }
+      rootCtx.fillStyle = isAct ? '#f8fafc' : '#cbd5e1';
+      rootCtx.fillText((isAct ? '▶ ' : '  ') + scName, bx + 6, by + 3);
+      debugSceneRects.push({ name: scName, x: bx, y: by, w: bw, h: bh });
+    }
+    rootCtx.restore();
+  }
 
   var userProgramFn = new Function('__rt', 'RoySDK', '__royLoopTick',
     'with (__rt) {\\n' +
@@ -3307,27 +4492,50 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
   var fpsFrames = 0, fpsAcc = 0;
 
   function frameLoop(now) {
-    var dt = Math.min(0.05, Math.max(0.001, (now - lastTs) / 1000));
+    var rawDt = Math.min(0.05, Math.max(0.001, (now - lastTs) / 1000));
     lastTs = now;
-    fpsFrames++; fpsAcc += dt;
+    fpsFrames++; fpsAcc += rawDt;
     if (fpsAcc >= 0.5) { currentFps = Math.round(fpsFrames / fpsAcc); fpsFrames = 0; fpsAcc = 0; }
-    telemetryTimer += dt;
+    telemetryTimer += rawDt;
     if (telemetryTimer >= 0.35) {
       telemetryTimer = 0;
-      try { window.parent.postMessage({ type: 'roystudio-telemetry', fps: currentFps, scene: currentScene, entities: worldEntities.length }, '*'); } catch(e) {}
+      try {
+        window.parent.postMessage({
+          type: 'roystudio-telemetry',
+          fps: currentFps,
+          scene: currentScene,
+          entities: worldEntities.length,
+          particles: pCount,
+          loopPct: Math.min(100, Math.round((lastLoopTicks / 1000000) * 100))
+        }, '*');
+      } catch(e) {}
+    }
+
+    if (transitionState.active) {
+      transitionState.elapsed += rawDt;
+      if (!transitionState.switched && transitionState.elapsed >= transitionState.dur * 0.5) {
+        transitionState.switched = true;
+        applySceneSwitchNow(transitionState.target, transitionState.payload);
+      }
+      if (transitionState.elapsed >= transitionState.dur) {
+        transitionState.active = false;
+      }
     }
 
     var frozen = false;
     if (freezeRem > 0) {
-      freezeRem = Math.max(0, freezeRem - dt);
+      freezeRem = Math.max(0, freezeRem - rawDt);
       frozen = true;
     }
 
-    if (!frozen) {
+    var dt = rawDt * gameplayTimeScale;
+    lastLoopTicks = __rt._loopTicks;
+    __rt._loopTicks = 0;
+
+    if (!frozen && dt > 0) {
       gameTime += dt;
       sceneTime += dt;
       sceneFrame++;
-      loopCounter = 0;
       for (var ai = afterTimers.length - 1; ai >= 0; ai--) {
         afterTimers[ai].rem -= dt;
         if (afterTimers[ai].rem <= 0) {
@@ -3361,17 +4569,39 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
       for (var er = worldEntities.length - 1; er >= 0; er--) {
         if (!worldEntities[er] || worldEntities[er].alive === false) worldEntities.splice(er, 1);
       }
-      for (var pi = particlePool.length - 1; pi >= 0; pi--) {
-        var pt = particlePool[pi];
-        pt.x += pt.vx * dt; pt.y += pt.vy * dt; pt.life -= dt;
-        if (pt.life <= 0) particlePool.splice(pi, 1);
+      var pi = 0;
+      while (pi < pCount) {
+        pLife[pi] -= dt;
+        if (pLife[pi] <= 0) {
+          var lastIdx = --pCount;
+          if (pi !== lastIdx) {
+            pX[pi] = pX[lastIdx]; pY[pi] = pY[lastIdx];
+            pVx[pi] = pVx[lastIdx]; pVy[pi] = pVy[lastIdx];
+            pLife[pi] = pLife[lastIdx]; pMaxLife[pi] = pMaxLife[lastIdx];
+            pSz0[pi] = pSz0[lastIdx]; pSz1[pi] = pSz1[lastIdx];
+            pGrav[pi] = pGrav[lastIdx]; pDrag[pi] = pDrag[lastIdx];
+            pR0[pi] = pR0[lastIdx]; pG0[pi] = pG0[lastIdx]; pB0[pi] = pB0[lastIdx];
+            pR1[pi] = pR1[lastIdx]; pG1[pi] = pG1[lastIdx]; pB1[pi] = pB1[lastIdx];
+            pBlend[pi] = pBlend[lastIdx];
+          }
+          continue;
+        }
+        if (pDrag[pi] > 0) {
+          var damp = Math.max(0, 1 - pDrag[pi] * dt);
+          pVx[pi] *= damp;
+          pVy[pi] *= damp;
+        }
+        pVy[pi] += pGrav[pi] * dt;
+        pX[pi] += pVx[pi] * dt;
+        pY[pi] += pVy[pi] * dt;
+        pi++;
       }
     }
 
     if (cam.followTarget) {
       var tx = (cam.followTarget.x || 0) - W / 2;
       var ty = (cam.followTarget.y || 0) - H / 2;
-      var alphaCam = Math.min(1, dt * cam.followSmooth);
+      var alphaCam = Math.min(1, rawDt * cam.followSmooth);
       cam.x += (tx - cam.x) * alphaCam;
       cam.y += (ty - cam.y) * alphaCam;
     }
@@ -3387,7 +4617,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
     var shakeOx = 0, shakeOy = 0;
     if (cam.shakeTime > 0) {
-      cam.shakeTime = Math.max(0, cam.shakeTime - dt);
+      cam.shakeTime = Math.max(0, cam.shakeTime - rawDt);
       var decay = cam.shakeDur > 0 ? cam.shakeTime / cam.shakeDur : 0;
       var mag = cam.shakePow * decay;
       shakeOx = (Math.random() * 2 - 1) * mag;
@@ -3399,9 +4629,13 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     mouse.wy = (mouse.y - H / 2) / (cam.zoom || 1) + H / 2 + cam.y;
     mouse.rx = mouse.wx; mouse.ry = mouse.wy;
 
-    ctx = rootCtx;
+    // 1. World Render Phase -> worldCanvas
+    frameBaseCtx = worldCtx;
+    ctx = worldCtx;
     ctx.save();
-    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     gameObj.clear();
     frameCamTransform.ox = shakeOx;
     frameCamTransform.oy = shakeOy;
@@ -3414,30 +4648,58 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     entitiesDrawnThisFrame = false;
     inDraw = true;
     for (var di = 0; di < hooks.draw.length; di++) {
-      loopCounter = 0;
       Promise.resolve(hooks.draw[di]()).catch(handleHookError);
     }
     if (!entitiesDrawnThisFrame && worldEntities.length > 0) {
       drawEntitiesNow();
     }
     inDraw = false;
-    ctx = rootCtx;
-    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.globalCompositeOperation = 'source-over';
-    for (var pj = 0; pj < particlePool.length; pj++) {
-      var q = particlePool[pj];
-      ctx.globalAlpha = Math.max(0, q.life / q.maxLife);
-      ctx.fillStyle = q.color;
-      ctx.fillRect(q.x - q.size / 2, q.y - q.size / 2, q.size, q.size);
+    ctx = worldCtx;
+    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+    var activePBlend = -1;
+    for (var pj = 0; pj < pCount; pj++) {
+      if (pBlend[pj] !== activePBlend) {
+        activePBlend = pBlend[pj];
+        ctx.globalCompositeOperation = activePBlend === 1 ? 'lighter' : 'source-over';
+      }
+      var prog = 1 - Math.max(0, Math.min(1, pLife[pj] / (pMaxLife[pj] || 1)));
+      var sz = pSz0[pj] + (pSz1[pj] - pSz0[pj]) * prog;
+      if (sz <= 0.1) continue;
+      var cr = Math.round(pR0[pj] + (pR1[pj] - pR0[pj]) * prog);
+      var cg = Math.round(pG0[pj] + (pG1[pj] - pG0[pj]) * prog);
+      var cb = Math.round(pB0[pj] + (pB1[pj] - pB0[pj]) * prog);
+      ctx.globalAlpha = Math.max(0, Math.min(1, 1 - prog));
+      ctx.fillStyle = 'rgb(' + cr + ',' + cg + ',' + cb + ')';
+      ctx.fillRect(pX[pj] - sz * 0.5, pY[pj] - sz * 0.5, sz, sz);
     }
+    ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
     ctx.restore();
 
-    // Экранный слой HUD поверх мира (без зума и смещения камеры)
+    // 2. Half-Res 2D Lighting Multiply Pass on worldCanvas
+    renderLightOverlayToWorld(shakeOx, shakeOy);
+
+    // 3. Composite World (WebGL2 Post-FX or 2D fallback) to rootCtx
+    frameBaseCtx = rootCtx;
+    ctx = rootCtx;
+    rootCtx.save();
+    rootCtx.setTransform(1, 0, 0, 1, 0, 0);
+    rootCtx.clearRect(0, 0, canvas.width, canvas.height);
+    if (runWebGLPostFx()) {
+      rootCtx.drawImage(glCanvas, 0, 0, canvas.width, canvas.height);
+    } else {
+      rootCtx.drawImage(worldCanvas, 0, 0, canvas.width, canvas.height);
+    }
+    rootCtx.restore();
+
+    // 4. Razor-sharp Screen UI & HUD Phase on rootCtx (bypasses Post-FX)
     if (hooks.drawUi.length > 0) {
+      ctx = rootCtx;
       ctx.save();
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
       for (var uiIdx = 0; uiIdx < hooks.drawUi.length; uiIdx++) {
-        loopCounter = 0;
         Promise.resolve(hooks.drawUi[uiIdx]()).catch(handleHookError);
       }
       ctx = rootCtx;
@@ -3446,11 +4708,12 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
 
     // Очередь встроенных тост-уведомлений
     if (toastQueue.length > 0) {
+      ctx = rootCtx;
       ctx.save();
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       for (var ti2 = toastQueue.length - 1; ti2 >= 0; ti2--) {
         var tst = toastQueue[ti2];
-        tst.rem -= dt;
+        tst.rem -= rawDt;
         if (tst.rem <= 0) { toastQueue.splice(ti2, 1); continue; }
         var tAlpha = Math.min(1, tst.rem * 2.5, (tst.dur - tst.rem) * 6 + 0.2);
         var ty = 14 + ti2 * 38;
@@ -3467,6 +4730,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
 
     if (runtimeErrorBanner) {
+      ctx = rootCtx;
       ctx.save();
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       drawRect(12, H - 40, W - 24, 28, 'rgba(127,29,29,0.92)', 6);
@@ -3475,13 +4739,36 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     }
 
     if (flashState.rem > 0) {
-      flashState.rem = Math.max(0, flashState.rem - dt);
-      ctx.save();
-      ctx.globalAlpha = flashState.dur > 0 ? Math.min(0.85, flashState.rem / flashState.dur) : 0;
-      ctx.fillStyle = flashState.color || '#ffffff';
-      ctx.fillRect(0, 0, W, H);
-      ctx.restore();
+      flashState.rem = Math.max(0, flashState.rem - rawDt);
+      rootCtx.save();
+      rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      rootCtx.globalAlpha = flashState.dur > 0 ? Math.min(0.85, flashState.rem / flashState.dur) : 0;
+      rootCtx.fillStyle = flashState.color || '#ffffff';
+      rootCtx.fillRect(0, 0, W, H);
+      rootCtx.restore();
     }
+
+    if (transitionState.active) {
+      var tp = Math.max(0, Math.min(1, transitionState.elapsed / (transitionState.dur || 0.4)));
+      var tCov = tp < 0.5 ? (tp * 2) : ((1 - tp) * 2);
+      rootCtx.save();
+      rootCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      rootCtx.fillStyle = transitionState.color || '#000000';
+      if (transitionState.kind === 'iris') {
+        var maxR = Math.hypot(W * 0.5, H * 0.5) + 4;
+        var holeR = Math.max(0, maxR * (1 - tCov));
+        rootCtx.beginPath();
+        rootCtx.rect(0, 0, W, H);
+        rootCtx.arc(W * 0.5, H * 0.5, holeR, 0, Math.PI * 2, true);
+        rootCtx.fill('evenodd');
+      } else {
+        rootCtx.globalAlpha = tCov;
+        rootCtx.fillRect(0, 0, W, H);
+      }
+      rootCtx.restore();
+    }
+
+    renderDebugOverlay();
 
     keysJustPressed = {};
     mouse.clicked = false;
@@ -3498,7 +4785,7 @@ html, body { width: 100%; height: 100%; background: #050811; overflow: hidden; d
     var sList = hooks.start.slice();
     var chain = Promise.resolve();
     sList.forEach(function(fn) {
-      chain = chain.then(function(){ loopCounter = 0; return fn(); });
+      chain = chain.then(function(){ __rt._loopTicks = 0; return fn(); });
     });
     return chain;
   }).then(function() {
