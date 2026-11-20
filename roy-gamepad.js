@@ -1,4 +1,4 @@
-// Roy Touch Gamepad Controller v6.3 (generated bundle — edit src/gamepad/roy-gamepad.js)
+// Roy Touch Gamepad Controller v6.4 (generated bundle — edit src/gamepad/roy-gamepad.js)
 
 // roylang/src/gamepad/roy-gamepad.js
 var KEY_DEFS = {
@@ -31,12 +31,22 @@ function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onVisibili
   let active = false;
   let useWasd = false;
   let useStick = false;
+  let mode = "auto";
+  let manualOverride = null;
   let extraButtons = [];
   const activePointers = /* @__PURE__ */ new Map();
   const keyHoldCounts = /* @__PURE__ */ new Map();
   let stickPointerId = null;
   const stickHeldDirs = { left: false, right: false, up: false, down: false };
   const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  function isPureTouchDevice() {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    try {
+      return window.matchMedia("(pointer: coarse)").matches && !window.matchMedia("(hover: hover)").matches;
+    } catch (_) {
+      return false;
+    }
+  }
   function dispatchVirtualAxis(x, y, isActive) {
     const iframe = typeof getIframeEl === "function" ? getIframeEl() : null;
     if (!iframe || !iframe.contentWindow) return;
@@ -281,6 +291,16 @@ function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onVisibili
     if (!cfg || typeof cfg !== "object") return;
     if (typeof cfg.wasd === "boolean") useWasd = cfg.wasd;
     if (typeof cfg.stick === "boolean") useStick = cfg.stick;
+    if (typeof cfg.mode === "string") {
+      const m = cfg.mode.toLowerCase();
+      if (m === "auto" || m === "touch" || m === "always" || m === "on" || m === "off") {
+        mode = m === "on" ? "always" : m;
+      }
+    } else if (cfg.always === true) {
+      mode = "always";
+    } else if (cfg.visible === false) {
+      mode = "off";
+    }
     if (Array.isArray(cfg.extras)) {
       extraButtons = cfg.extras.slice(0, 4).map((item) => {
         if (typeof item === "string") {
@@ -297,12 +317,31 @@ function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onVisibili
       if (active) renderMarkup(overlay);
       else overlay.innerHTML = "";
     }
-    if (typeof cfg.visible === "boolean") setVisible(cfg.visible);
+    if (mode === "off" || cfg.visible === false) {
+      setVisible(false);
+    } else if (mode === "always" || cfg.always === true) {
+      setVisible(true);
+    } else if (cfg.visible === true || mode === "auto" || mode === "touch") {
+      if (manualOverride !== null) setVisible(manualOverride);
+      else setVisible(isPureTouchDevice());
+    }
+  }
+  function handleInputDevice(dev) {
+    if (mode === "off") return;
+    if (dev === "touch") {
+      if (manualOverride !== false) setVisible(true);
+    } else if (dev === "kbm" || dev === "gamepad") {
+      if ((mode === "auto" || mode === "touch") && manualOverride !== true && active) {
+        setVisible(false);
+      }
+    }
   }
   function resetConfig() {
     releaseAll();
     useWasd = false;
     useStick = false;
+    mode = "auto";
+    manualOverride = null;
     extraButtons = [];
     const overlay = typeof getOverlayEl === "function" ? getOverlayEl() : null;
     if (overlay) {
@@ -314,10 +353,13 @@ function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onVisibili
     window._royGamepadMsgBound = true;
     window.addEventListener("message", (e) => {
       const d = e && e.data;
-      if (!d || d.type !== "roy-gamepad-config") return;
+      if (!d) return;
       const iframe = typeof getIframeEl === "function" ? getIframeEl() : null;
-      if (iframe && iframe.contentWindow && e.source === iframe.contentWindow) {
+      if (!iframe || !iframe.contentWindow || e.source !== iframe.contentWindow) return;
+      if (d.type === "roy-gamepad-config") {
         setConfig(d);
+      } else if (d.type === "roy-input-device") {
+        handleInputDevice(String(d.device || ""));
       }
     });
   }
@@ -342,12 +384,13 @@ function createRoyTouchGamepadController({ getOverlayEl, getIframeEl, onVisibili
     return active;
   }
   function toggle() {
+    manualOverride = !active;
     return setVisible(!active);
   }
   function isVisible() {
     return active;
   }
-  return { setVisible, toggle, isVisible, releaseAll, setConfig, resetConfig };
+  return { setVisible, toggle, isVisible, releaseAll, setConfig, resetConfig, handleInputDevice };
 }
 export {
   createRoyTouchGamepadController
