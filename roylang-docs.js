@@ -1,7 +1,7 @@
-// RoyLang Docs, Index & Signature Metadata v6.5 (generated bundle — edit src/docs/index.js)
+// RoyLang Docs, Index & Signature Metadata v6.6 (generated bundle — edit src/docs/index.js)
 
 // roylang/src/compiler/constants.js
-var VERSION = "v6.5";
+var VERSION = "v6.6";
 var KEYWORDS = /* @__PURE__ */ new Set([
   "game",
   "entity",
@@ -619,11 +619,72 @@ var KNOWN_RUNTIME_GLOBALS = /* @__PURE__ */ new Set([
   "isFinite",
   "console",
   "window",
-  "document"
+  "document",
+  "material",
+  "drawWithMaterial",
+  "animTimeline",
+  "parseRoyAnim",
+  "autoTileMap",
+  "paperDoll",
+  "parseTiled",
+  "loadTiled",
+  "parseLDtk",
+  "loadLDtk",
+  "parseAseprite",
+  "loadAseprite",
+  "parseRoyScene",
+  "loadSceneData",
+  "registerPrefab",
+  "loadPrefabs",
+  "spawnPrefab",
+  "stats",
+  "component",
+  "ecsWorld",
+  "query",
+  "signal",
+  "signals",
+  "achievements",
+  "runStats",
+  "platformerPro",
+  "roomCamera",
+  "physicsWorld2D",
+  "physicsJoint",
+  "navMesh",
+  "voiceBlip",
+  "audioBus",
+  "soundBank",
+  "scene3D",
+  "parseGLB",
+  "loadGLTF",
+  "platformSDK",
+  "netPredict",
+  "safeArea",
+  "uiScale",
+  "autoNormalMap",
+  "normalLight",
+  "trailRibbon",
+  "combatCombo",
+  "questSystem",
+  "skeleton2D",
+  "fpsController3D",
+  "voxelWorld3D",
+  "saveSlots",
+  "keyRebind",
+  "profiler",
+  "debugOverlay"
 ]);
 
 // roylang/src/docs/index.js
 var ROY_DOCS_VERSION = VERSION;
+var ROY_DOCS_CODENAME = "Vanguard";
+var ROY_DOCS_BRANCH = "Odyssey";
+var ROY_DOCS_BRANCHES = [
+  { id: "genesis", range: "v1–v3", name: "Genesis", ru: "Зарождение", releases: ["v1 Spark", "v2 Canvas", "v3 Arcade"] },
+  { id: "horizon", range: "v4", name: "Horizon", ru: "Горизонт", releases: ["v4 Horizon"] },
+  { id: "lumen", range: "v5", name: "Lumen", ru: "Свет", releases: ["v5 Lumen"] },
+  { id: "odyssey", range: "v6.0–v6.6", name: "Odyssey", ru: "Одиссея", releases: ["v6 Chronos", "v6.1 Puppeteer", "v6.2 Atlas", "v6.3 Mirage", "v6.4 Titan", "v6.5 Forge", "v6.6 Vanguard"] },
+  { id: "nexus", range: "v7.0", name: "Nexus", ru: "Экосистема (в планах)", releases: ["v7.0 Nexus"] }
+];
 var ROY_KEYWORDS = Array.from(KEYWORDS);
 var ROY_RUNTIME_APIS = Array.from(KNOWN_RUNTIME_GLOBALS);
 var ROY_DOCS_CATS = [
@@ -639,17 +700,31 @@ var ROY_DOCS_CATS = [
 ];
 var ROY_DOCS_VERSIONS = [
   { id: "all", label: "Все версии" },
-  { id: "v6.5", label: "v6.5" },
-  { id: "v6.4", label: "v6.4" },
-  { id: "v6.3", label: "v6.3" },
-  { id: "v6.2", label: "v6.2" },
-  { id: "v6.1", label: "v6.1" },
-  { id: "v6", label: "v6" },
-  { id: "v5", label: "v5" },
-  { id: "v4", label: "v4" },
-  { id: "v1-v3", label: "v1-v3" }
+  { id: "v6.6", label: "v6.6 · Vanguard", codename: "Vanguard", branch: "Odyssey" },
+  { id: "v6.5", label: "v6.5 · Forge", codename: "Forge", branch: "Odyssey" },
+  { id: "v6.4", label: "v6.4 · Titan", codename: "Titan", branch: "Odyssey" },
+  { id: "v6.3", label: "v6.3 · Mirage", codename: "Mirage", branch: "Odyssey" },
+  { id: "v6.2", label: "v6.2 · Atlas", codename: "Atlas", branch: "Odyssey" },
+  { id: "v6.1", label: "v6.1 · Puppeteer", codename: "Puppeteer", branch: "Odyssey" },
+  { id: "v6", label: "v6 · Chronos", codename: "Chronos", branch: "Odyssey" },
+  { id: "v5", label: "v5 · Lumen", codename: "Lumen", branch: "Lumen" },
+  { id: "v4", label: "v4 · Horizon", codename: "Horizon", branch: "Horizon" },
+  { id: "v1-v3", label: "v1–v3 · Genesis", codename: "Genesis", branch: "Genesis" }
 ];
 var ROYLANG_V3_DOCS = [
+  {"cat":"draw","ver":"v6.6","badge":"Визуал (v6.6)","title":"richText — кинетический текст с тегами и иконками","desc":"Поддержка тегов [shake], [wave], [rainbow], [pulse], [color=#...], [size=N], [b], [i], встроенных иконок [icon=skull|heart|star|coin|sword|shield|fire|gem|bolt|crown] и эффекта печатной машинки maxChars.","code":"on drawUi {\n  richText(\"[shake]ОСТОРОЖНО![/shake] Урон: [color=#f43f5e][wave]999[/wave][/color] [icon=skull]\", 40, 40, { size: 22, maxChars: 60 })\n}"},
+  {"cat":"draw","ver":"v6.6","badge":"Шейдеры (v6.6)","title":"material & drawWithMaterial — материалы на спрайт","desc":"Персональные материалы на отдельный спрайт или карту: dissolve (растворение), foil/holo (перелив Balatro), hologram, petrify (окаменение), windSway (качание от ветра), outlineGlow и hitFlash.","code":"let holo = material(\"foil\", { intensity: 0.9 })\nlet dis = material(\"dissolve\", { progress: 0.4, edgeColor: \"#f97316\" })\non update(dt) { holo.update(dt) }\non draw {\n  drawWithMaterial(hero, 120, 140, holo, { w: 64, h: 64 })\n  dis.draw(boss, 320, 140, { w: 80, h: 80 })\n}"},
+  {"cat":"assets","ver":"v6.6","badge":"Анимация (v6.6)","title":"animTimeline & paperDoll & autoTileMap","desc":"Ключевые кадры с кривыми easing и событиями на кадрах (animTimeline / .royanim), модульный персонаж слоями (paperDoll) и 47-тайловый умный автотайлер с тенями, декором и анимированной водой (autoTileMap).","code":"let tl = animTimeline({\n  loop: true,\n  tracks: { y: [{ t: 0, v: 0, ease: \"easeOut\" }, { t: 0.4, v: -36, ease: \"easeIn\" }, { t: 0.8, v: 0 }] },\n  events: [{ t: 0.4, fn: () => sfxPreset(\"jump\") }]\n})\nlet doll = paperDoll({ slots: { body: \"#f5d0fe\", armor: \"#38bdf8\", weapon: \"#fbbf24\" } })\nlet map = autoTileMap([[0,0,1,1],[0,1,2,1],[1,1,1,1]], { tileSize: 32 })"},
+  {"cat":"assets","ver":"v6.6","badge":"Импорт (v6.6)","title":"Tiled (.tmj), LDtk (.ldtk), Aseprite (.json), .royscene & .royprefab","desc":"Загрузка карт из Tiled и LDtk, анимаций с frameTags из Aseprite, сцен .royscene и переиспользуемых префабов .royprefab с наследованием extends.","code":"registerPrefab(\"goblin\", { tag: \"enemy\", w: 24, h: 24, stats: { hp: 40, dmg: 8 } })\nregisterPrefab(\"goblin_king\", { extends: \"goblin\", stats: { hp: 220, dmg: 22 } })\nlet boss = spawnPrefab(\"goblin_king\", 400, 220)\n// let lvl = await loadLDtk(\"world.ldtk\")\n// let spr = await loadAseprite(\"hero.json\", \"hero.png\")"},
+  {"cat":"syntax","ver":"v6.6","badge":"Архитектура (v6.6)","title":"stats, ecsWorld/component/query, signal, achievements & runStats","desc":"Чистая архитектура для игр на 3000+ строк: статы с плоскими/%/мультипликативными и временными модификаторами, лёгкий ECS, типизированные сигналы с .wait(), ачивки с выезжающими плашками и статистика забега.","code":"let st = stats({ dmg: 20 })\nst.addMod(\"dmg\", { flat: 10, source: \"sword\" })\nst.addMod(\"dmg\", { pct: 0.25, source: \"ring\" })\nst.addMod(\"dmg\", { mult: 1.5, dur: 5, source: \"crit\" })\nlet onKill = signal(\"enemyKilled\")\nonKill.on((e) => ach.progress(\"slayer\", 1))\nlet ach = achievements([{ id: \"slayer\", title: \"Охотник\", target: 10 }])"},
+  {"cat":"physics","ver":"v6.6","badge":"AAA Физика (v6.6)","title":"platformerPro, roomCamera, physicsWorld2D & navMesh","desc":"Платформер уровня Celeste (coyote time, jump buffer, corner correction, one-way, moving platforms, slopes, wall-jump, dash, ladders), комнатная камера, 2D-физика с шарнирами/пружинами/моторами/разрушаемыми балками и полигональный navMesh.","code":"let ctrl = platformerPro(hero, { coyoteTime: 0.12, cornerCorrection: 6 })\nlet rcam = roomCamera([{ x: 0, y: 0, w: 800, h: 500 }, { x: 800, y: 0, w: 800, h: 500 }])\nlet pw = physicsWorld2D({ gravity: 680 })\nlet a = pw.addBody({ x: 200, y: 100, static: true })\nlet b = pw.addBody({ x: 260, y: 120 })\npw.addJoint(\"breakable\", a, b, { maxForce: 450 })"},
+  {"cat":"sdk","ver":"v6.6","badge":"Аудио (v6.6)","title":"voiceBlip, audioBus & soundBank","desc":"Голоса диалогов как в Undertale/Celeste (voiceBlip), шины микшера с auto-ducking и фильтрами underwater/cave/radio (audioBus), а также soundBank с round-robin и случайным питчем.","code":"let sans = voiceBlip(\"sans\")\nsans.speakChar(\"A\")\naudioBus(\"music\").setVolume(0.7)\naudioBus(\"sfx\").setEnvironment(\"cave\")\nlet sfx = soundBank({ step: { bus: \"sfx\", pitchVar: 0.15, variants: [{ freq: 180 }, { freq: 210 }] } })\nsfx.play(\"step\")"},
+  {"cat":"draw","ver":"v6.6","badge":"WebGL2 3D (v6.6)","title":"scene3D + 3D-свет + билборды + fpsController3D + voxelWorld3D + parseGLB","desc":"Настоящий аппаратный WebGL2 3D-рендер с Z-буфером, до 4 точечных источников света (addLight), процедурными и спрайтовыми текстурами (createTexture/setTexture), 3D-билбордами спрайтов (addBillboard), мягкими тенями (shadow: true), цилиндрами/конусами, PS1-режимом, воксельным миром voxelWorld3D, FPS/TPS-контроллером fpsController3D и парсером .glb / .gltf моделей.","code":"let s3 = scene3D({ ps1: true, fogNear: 10, fogFar: 45 })\ns3.addPlane({ w: 40, d: 40, texture: \"checker\" })\ns3.addLight({ x: 0, y: 4, z: 2, color: \"#fbbf24\", radius: 14 })\nlet enemy = s3.addBillboard({ x: 0, y: 1.2, z: -4, w: 1.5, h: 2, shadow: true })\nlet fps = fpsController3D({ x: 0, y: 0, z: 6 })\nlet vox = voxelWorld3D(s3).fillBox(-2, 0, -6, 2, 1, -6, 3)\nvox.rebuild()\non update(dt) { fps.update(dt); fps.syncCamera(s3) }\non draw { s3.render() }"},
+  {"cat":"draw","ver":"v6.6","badge":"2D-свет и Шлейфы (v6.6)","title":"autoNormalMap · normalLight · trailRibbon","desc":"Автогенерация карт нормалей из обычного пиксель-арта (autoNormalMap), попиксельное объёмное 2D-освещение спрайтов как в Dead Cells / Sea of Stars (normalLight) и плавные светящиеся ленты-трейлы от взмаха меча или ракет (trailRibbon).","code":"let nm = autoNormalMap(heroSprite, { strength: 2.5 })\nlet slash = trailRibbon({ width: 16, color: \"#38bdf8\", endColor: \"#a855f7\", lifetime: 0.25 })\non update(dt) {\n  slash.push(swordTip.x, swordTip.y)\n  slash.update(dt)\n}\non draw {\n  normalLight(heroSprite, nm, hero.x, hero.y, [{ x: mouse.x, y: mouse.y, color: \"#fbbf24\", radius: 220 }])\n  slash.draw()\n}"},
+  {"cat":"physics","ver":"v6.6","badge":"Боёвка, Квесты и IK (v6.6)","title":"combatCombo · questSystem · skeleton2D (2-bone IK)","desc":"Цепочки ударов (L->L->H) с буфером ввода, окнами отмены, идеальным парированием и i-frames (combatCombo), многоступенчатые задания с готовым HUD-трекером (questSystem) и 2D-костный скелет с плавным блендингом поз и аналитическим 2-bone IK для ног на склонах (skeleton2D).","code":"let combo = combatCombo({ onParry: () => juice(\"hit\", hero.x, hero.y) })\nlet quests = questSystem([{ id: \"q1\", title: \"Побег\", autoStart: true, steps: [{ id: \"keys\", text: \"Ключи\", count: 3 }] }])\nlet leg = skeleton2D().addBone(\"thigh\", null, { len: 24 }).addBone(\"shin\", \"thigh\", { len: 24 })\nleg.solveIK(\"shin\", footTargetX, footTargetY)\nquests.drawTracker(14, 14)"},
+  {"cat":"sdk","ver":"v6.6","badge":"Сейвы, Ремап и Профайлер (v6.6)","title":"saveSlots · keyRebind · profiler · debugOverlay","desc":"Слоты сохранений с автосейвом, метаданными и миграцией версий (saveSlots), интерактивное переназначение клавиш с сохранением (keyRebind), живой профайлер кадра со спарклайном и замерами секций (profiler) и 1-строчный отладочный оверлей (debugOverlay).","code":"let saves = saveSlots(\"rpg\", { slots: 5, version: 2, migrations: { 1: (d) => ({ ...d, gold: 0 }) } })\nlet keys = keyRebind({ jump: \"Space\", attack: \"KeyJ\" })\nlet prof = profiler()\nlet dbg = debugOverlay()\non update(dt) { prof.begin(\"ai\"); updateAI(dt); prof.end(\"ai\"); prof.frame(dt) }\non drawUi { prof.draw(12, 12); dbg.watch(\"FPS\", prof.stats().fps).draw() }"},
+  {"cat":"sdk","ver":"v6.6","badge":"Площадки & Сеть (v6.6)","title":"platformSDK, netPredict, safeArea & uiScale","desc":"Единый SDK для Desktop/Яндекс Игр/VK Play/Telegram/itch.io/RoySDK, клиентское предсказание и откат (netPredict) для сетевых игр, плюс адаптивный HUD (safeArea / uiScale).","code":"await platformSDK.init()\nlet np = netPredict({ initialState: { x: 100, y: 100 } })\nlet sa = safeArea()\nlet sc = uiScale({ baseW: 800, baseH: 500 })\non drawUi { text(\"HUD\", sa.x + sc.px(12), sa.y + sc.px(12), { size: sc.font(16) }) }"},
+
   {
     cat: "core",
     badge: "Конфиг игры",
@@ -2566,9 +2641,66 @@ var ROY_DOCS_INDEX = [
   { name: "roylang atlas", kind: "CLI", cat: "assets", ver: "v6.5", sig: "roylang atlas assets/sprites -o assets/atlas.royson", desc: "CLI-упаковщик папки PNG-спрайтов в готовый .royson-манифест атласа." },
   { name: "roylang export-pwa", kind: "CLI", cat: "sdk", ver: "v6.5", sig: "roylang export-pwa game.royproj -o dist-pwa/", desc: "Собирает оффлайн-готовый PWA-пакет (manifest.json + Service Worker + иконки) для мобильных и браузера." },
   { name: "roylang build --release --minify", kind: "CLI", cat: "sdk", ver: "v6.5", sig: "roylang build game.royproj --release --minify", desc: "Релизная сборка с вырезанием #if DEBUG, удалением __rt._loc и минификацией итогового JS-бандла." }
+,
+  {"name":"richText (v6.6)","kind":"Функция","cat":"draw","ver":"v6.6","sig":"richText(str, x, y, { size, maxChars, maxW, align })","desc":"Кинетический текст с тегами [shake], [wave], [rainbow], [pulse], [color], [size], [icon=...] и typewriter maxChars."},
+  {"name":"material","kind":"Функция","cat":"fx","ver":"v6.6","sig":"material(type, { progress, color, edgeColor, intensity, amplitude })","desc":"Создаёт шейдер-материал для спрайта: dissolve, foil, holo, hologram, petrify, windSway, outlineGlow, hitFlash."},
+  {"name":"drawWithMaterial","kind":"Функция","cat":"fx","ver":"v6.6","sig":"drawWithMaterial(src, x, y, mat, { w, h })","desc":"Рисует спрайт, канвас или коллбэк с наложением спрайтового материала material()."},
+  {"name":"animTimeline","kind":"Функция","cat":"assets","ver":"v6.6","sig":"animTimeline({ tracks, events, loop, duration })","desc":"Таймлайн ключевых кадров с кривыми easing (linear..bounceOut), интерполяцией цветов и точными событиями на кадрах."},
+  {"name":"parseRoyAnim","kind":"Функция","cat":"assets","ver":"v6.6","sig":"parseRoyAnim(roysonOrJsonStr)","desc":"Парсит .royanim файл в готовый проигрыватель animTimeline()."},
+  {"name":"autoTileMap","kind":"Функция","cat":"physics","ver":"v6.6","sig":"autoTileMap(grid, { tileSize, palette })","desc":"47-тайловый умный автотайлер: берега, скругления, тени под стенами, декор (трава/камни) и анимированная вода."},
+  {"name":"paperDoll","kind":"Функция","cat":"assets","ver":"v6.6","sig":"paperDoll({ slots, order, tints, scale })","desc":"Модульный персонаж слоями (body/hair/armor/helmet/weapon/cloak) с .equip()/.unequip() и синхронной анимацией."},
+  {"name":"parseTiled","kind":"Функция","cat":"assets","ver":"v6.6","sig":"parseTiled(jsonOrStr)","desc":"Парсер карт Tiled (.tmj/.json): тайловые слои, объекты, полигоны, кастомные свойства, .getObjects() и .draw()."},
+  {"name":"loadTiled","kind":"Функция","cat":"assets","ver":"v6.6","sig":"await loadTiled(path)","desc":"Загружает и парсит карту Tiled (.tmj) из ассетов или по пути."},
+  {"name":"parseLDtk","kind":"Функция","cat":"assets","ver":"v6.6","sig":"parseLDtk(jsonOrStr)","desc":"Парсер миров LDtk (.ldtk): уровни, IntGrid, тайлы и EntityInstances с полями."},
+  {"name":"loadLDtk","kind":"Функция","cat":"assets","ver":"v6.6","sig":"await loadLDtk(path)","desc":"Загружает мир LDtk (.ldtk) в одну строку."},
+  {"name":"parseAseprite","kind":"Функция","cat":"assets","ver":"v6.6","sig":"parseAseprite(jsonOrStr, img?)","desc":"Парсер анимаций Aseprite (.json Hash/Array): frameTags (forward/reverse/pingpong), slices, .play()/.update()/.draw()."},
+  {"name":"loadAseprite","kind":"Функция","cat":"assets","ver":"v6.6","sig":"await loadAseprite(jsonPath, imgPath?)","desc":"Загружает Aseprite JSON + спрайтшит и возвращает готовый аниматор."},
+  {"name":"parseRoyScene","kind":"Функция","cat":"scenes","ver":"v6.6","sig":"parseRoyScene(roysonOrJson)","desc":"Парсит описание уровня .royscene (сущности, префабы, триггеры, свет, пути патрулей, чекпоинты)."},
+  {"name":"loadSceneData","kind":"Функция","cat":"scenes","ver":"v6.6","sig":"await loadSceneData(pathOrData)","desc":"Загружает .royscene с методом .instantiate() для спавна всех объектов уровня."},
+  {"name":"registerPrefab","kind":"Функция","cat":"entities","ver":"v6.6","sig":"registerPrefab(name, { extends, stats, components, loot, ai })","desc":"Регистрирует префаб сущности с поддержкой наследования extends."},
+  {"name":"loadPrefabs","kind":"Функция","cat":"entities","ver":"v6.6","sig":"await loadPrefabs(pathOrData)","desc":"Загружает библиотеку префабов из .royprefab / .royson."},
+  {"name":"spawnPrefab","kind":"Функция","cat":"entities","ver":"v6.6","sig":"spawnPrefab(name, x, y, overrides?)","desc":"Спавнит экземпляр зарегистрированного префаба с его статами, хитбоксом и свойствами."},
+  {"name":"stats","kind":"Функция","cat":"entities","ver":"v6.6","sig":"stats({ hp, dmg, speed })","desc":"Система статов и модификаторов (flat, pct, mult, override, source, dur) с идеальным пересчётом и .update(dt)."},
+  {"name":"component","kind":"Функция","cat":"entities","ver":"v6.6","sig":"component(name, factoryFn)","desc":"Регистрирует переиспользуемый ECS-компонент (встроены Damageable, Knockback, DropLoot, FlashOnHit)."},
+  {"name":"ecsWorld","kind":"Функция","cat":"entities","ver":"v6.6","sig":"ecsWorld()","desc":"Создаёт лёгкий ECS-мир с createEntity, addComp, removeComp, query(...comps), addSystem и step(dt)."},
+  {"name":"query","kind":"Функция","cat":"entities","ver":"v6.6","sig":"query(...componentNames)","desc":"Выбирает все активные сущности, обладающие заданным набором компонентов."},
+  {"name":"signal","kind":"Функция","cat":"scenes","ver":"v6.6","sig":"signal(name?)","desc":"Типизированный сигнал: .on(), .once(), .off(), .emit(...args), .wait() (для корутин) и .pipe()."},
+  {"name":"signals","kind":"Объект","cat":"scenes","ver":"v6.6","sig":"signals.onEnemyKilled.emit(e)","desc":"Глобальная шина именованных сигналов с автосозданием при обращении."},
+  {"name":"achievements","kind":"Функция","cat":"sdk","ver":"v6.6","sig":"achievements(defs, { storageKey })","desc":"Встроенные ачивки как в Steam: .unlock(), .progress(), выезжающие плашки .draw() и автосохранение."},
+  {"name":"runStats","kind":"Функция","cat":"sdk","ver":"v6.6","sig":"runStats({ storageKey })","desc":"Счётчики статистики за забег и за всё время (.inc, .max, .startRun, .endRun) с автосохранением."},
+  {"name":"platformerPro","kind":"Функция","cat":"physics","ver":"v6.6","sig":"platformerPro(body, { coyoteTime, jumpBuffer, cornerCorrection })","desc":"Контроллер платформера уровня Celeste: coyote time, jump buffer, corner correction, one-way, moving platforms, slopes, wall-jump, dash, ladders."},
+  {"name":"roomCamera","kind":"Функция","cat":"draw","ver":"v6.6","sig":"roomCamera(rooms, { speed, onRoomChange })","desc":"Комнатная камера как в Celeste/Zelda/Isaac с плавным перелётом и .isInActiveRoom() для заморозки врагов."},
+  {"name":"physicsWorld2D","kind":"Функция","cat":"physics","ver":"v6.6","sig":"physicsWorld2D({ gravity, floorY })","desc":"2D-физика твёрдых тел с соединениями (distance, spring, revolute, motor, breakable) для мостов и машин."},
+  {"name":"physicsJoint","kind":"Функция","cat":"physics","ver":"v6.6","sig":"physicsJoint(type, bodyA, bodyB, { length, stiffness, maxForce, motorSpeed })","desc":"Создаёт физическое соединение между двумя телами (шарнир, пружина, мотор, разрушаемая балка)."},
+  {"name":"navMesh","kind":"Функция","cat":"physics","ver":"v6.6","sig":"navMesh(polygons)","desc":"Полигональный поиск пути .findPath(sx, sy, gx, gy) со сглаживанием углов (string pulling)."},
+  {"name":"voiceBlip","kind":"Функция","cat":"audio","ver":"v6.6","sig":"voiceBlip(\"hero\"|\"robot\"|\"boss\"|\"cute\"|\"ghost\"|\"sans\"|opts)","desc":"Процедурный голос диалогов как в Undertale/Celeste: .speakChar(ch) с интонацией на ! и ?."},
+  {"name":"audioBus","kind":"Функция","cat":"audio","ver":"v6.6","sig":"audioBus(\"sfx\"|\"music\"|\"voice\"|\"ambient\"|\"master\")","desc":"Аудио-шина микшера с .setVolume(), .mute(), auto-ducking .duck() и фильтрами .setEnvironment(\"underwater\"|\"cave\"|\"radio\")."},
+  {"name":"soundBank","kind":"Функция","cat":"audio","ver":"v6.6","sig":"soundBank({ step: { bus, pitchVar, variants } })","desc":"Банк звуков с round-robin чередованием, случайным питчем и auto-ducking шины."},
+  {"name":"scene3D","kind":"Функция","cat":"draw","ver":"v6.6","sig":"scene3D({ ps1, fov, fogNear, fogFar, skyTop, skyBottom })","desc":"Аппаратный WebGL2 3D-рендер с Z-буфером, 4 точечными источниками света (addLight), текстурами (createTexture/setTexture), 3D-билбордами (addBillboard), тенями (shadow: true), цилиндрами/конусами, PS1-режимом и рейкастом."},
+  {"name":"parseGLB","kind":"Функция","cat":"assets","ver":"v6.6","sig":"parseGLB(arrayBuffer)","desc":"Парсер бинарных 3D-моделей .glb (glTF 2.0): меши, нормали, UV, цвета материалов, узлы и анимации."},
+  {"name":"loadGLTF","kind":"Функция","cat":"assets","ver":"v6.6","sig":"await loadGLTF(pathOrData)","desc":"Загружает 3D-модель .glb / .gltf для добавления в scene3D.addGLTF()."},
+  {"name":"platformSDK","kind":"Объект","cat":"sdk","ver":"v6.6","sig":"await platformSDK.init() / saveCloud / showRewardedAd / haptic","desc":"Единый SDK для Desktop/Steam, Яндекс Игр, VK Play, Telegram Mini Apps, itch.io и RoySDK."},
+  {"name":"netPredict","kind":"Функция","cat":"sdk","ver":"v6.6","sig":"netPredict({ initialState, step })","desc":"Клиентское предсказание, откат (reconcile) и сглаживание удалённых игроков (interpRemote) для сетевых игр."},
+  {"name":"safeArea","kind":"Функция","cat":"ui","ver":"v6.6","sig":"safeArea(opts?)","desc":"Безопасные отступы HUD для экранов с чёлкой, 16:9 и ультрашироких 21:9 мониторов."},
+  {"name":"uiScale","kind":"Функция","cat":"ui","ver":"v6.6","sig":"uiScale({ baseW, baseH, min, max })","desc":"Адаптивный коэффициент масштабирования интерфейса (.factor, .px(n), .font(n))."},
+  {"name":"autoNormalMap","kind":"Функция","cat":"fx","ver":"v6.6","sig":"autoNormalMap(sprite, { strength, invert })","desc":"Автоматически генерирует карту нормалей (Sobel) из обычного спрайта для объёмного 2D-освещения."},
+  {"name":"normalLight","kind":"Функция","cat":"fx","ver":"v6.6","sig":"normalLight(sprite, normalMap, x, y, lights, { ambient })","desc":"Попиксельно освещает 2D-спрайт по карте нормалей от динамических источников света (Dead Cells / Sea of Stars)."},
+  {"name":"trailRibbon","kind":"Функция","cat":"fx","ver":"v6.6","sig":"trailRibbon({ width, color, endColor, lifetime, glow })","desc":"Гладкий сужающийся светящийся шлейф от взмаха меча, ракеты или плаща (.push, .update, .draw)."},
+  {"name":"combatCombo","kind":"Функция","cat":"physics","ver":"v6.6","sig":"combatCombo({ moves, bufferTime, parryWindow, onParry })","desc":"Боевая система комбо (L->L->H) с буфером ввода, окнами отмены, парированием, i-frames и хитстопом."},
+  {"name":"questSystem","kind":"Функция","cat":"scenes","ver":"v6.6","sig":"questSystem([{ id, title, steps, reward, onComplete }])","desc":"Многоступенчатые задания с автопрогрессом .progress(), наградами, сериализацией и HUD-трекером .drawTracker()."},
+  {"name":"skeleton2D","kind":"Функция","cat":"assets","ver":"v6.6","sig":"skeleton2D().addBone(name, parent, { len, angle })","desc":"2D-костный скелет с плавным блендингом поз (.playPose) и аналитическим 2-bone IK (.solveIK)."},
+  {"name":"fpsController3D","kind":"Функция","cat":"draw","ver":"v6.6","sig":"fpsController3D({ x, y, z, speed, mode: \"fps\"|\"tps\" })","desc":"Готовый 3D-контроллер от 1-го/3-го лица: WASD, обзор мышью, прыжок, спринт, AABB-коллизии и .syncCamera(scene3D)."},
+  {"name":"voxelWorld3D","kind":"Функция","cat":"draw","ver":"v6.6","sig":"voxelWorld3D(scene3D, { blockSize, palette })","desc":"3D-воксельный мир с отсечением скрытых граней (.setBlock, .fillBox, .rebuild) и DDA-рейкастом блоков (.raycast)."},
+  {"name":"saveSlots","kind":"Функция","cat":"sdk","ver":"v6.6","sig":"saveSlots(\"rpg\", { slots: 5, version: 2, migrations })","desc":"Менеджер слотов сохранений с автосейвом, метаданными (уровень, дата) и миграцией старых версий сейвов."},
+  {"name":"keyRebind","kind":"Функция","cat":"input","ver":"v6.6","sig":"keyRebind({ jump: \"Space\", attack: \"KeyJ\" })","desc":"Интерактивное переназначение клавиш с разрешением конфликтов (.listen, .set, .isDown, .reset) и автосохранением."},
+  {"name":"profiler","kind":"Функция","cat":"sdk","ver":"v6.6","sig":"profiler().begin(\"ai\") ... end(\"ai\") ... draw(12, 12)","desc":"Профайлер кадра в реальном времени: FPS, avg/max ms, график-спарклайн и полосы времени по секциям."},
+  {"name":"debugOverlay","kind":"Функция","cat":"sdk","ver":"v6.6","sig":"debugOverlay().box(x, y, w, h).watch(\"HP\", hp).draw()","desc":"Отключаемый 1-строчный отладочный оверлей для хитбоксов, кругов, векторов скорости, navMesh и переменных."}
 ];
 var docs_default = {
   ROY_DOCS_VERSION,
+  ROY_DOCS_CODENAME,
+  ROY_DOCS_BRANCH,
+  ROY_DOCS_BRANCHES,
   ROY_KEYWORDS,
   ROY_RUNTIME_APIS,
   ROY_DOCS_CATS,
@@ -2581,7 +2713,10 @@ var docs_default = {
 };
 export {
   ROYLANG_V3_DOCS,
+  ROY_DOCS_BRANCH,
+  ROY_DOCS_BRANCHES,
   ROY_DOCS_CATS,
+  ROY_DOCS_CODENAME,
   ROY_DOCS_INDEX,
   ROY_DOCS_INDEX_GROUPS,
   ROY_DOCS_VERSION,
