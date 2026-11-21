@@ -1,8 +1,8 @@
-// RoyLang Docs, Index & Signature Metadata v6.8 «Prism» (generated bundle — edit src/docs/index.js)
+// RoyLang Docs, Index & Signature Metadata v6.9 «Zenith» (generated bundle — edit src/docs/index.js)
 
 // roylang/src/compiler/constants.js
-var VERSION = "v6.8";
-var CODENAME = "Prism";
+var VERSION = "v6.9";
+var CODENAME = "Zenith";
 var KEYWORDS = /* @__PURE__ */ new Set([
   "game",
   "entity",
@@ -788,6 +788,39 @@ var KNOWN_RUNTIME_GLOBALS = /* @__PURE__ */ new Set([
   "p2pRoom",
   "p2pHost",
   "p2pJoin",
+  // v6.9 «Zenith» — Modular Pack: v69-gpu (WebGL2 GLSL Shaders, 100k+ GPU Particles, 3D Raymarching)
+  "glslShader",
+  "gpuParticles",
+  "raymarch3D",
+  // v6.9 «Zenith» — Modular Pack: v69-3d-world (3D Rigid-Body Physics, Vehicles, 3D A*, Skybox3D, Water3D)
+  "physics3D",
+  "vehicle3D",
+  "pathfind3D",
+  "skybox3D",
+  "water3D",
+  // v6.9 «Zenith» — Modular Pack: v69-zenith (Voice/MIDI/Webcam, Storage/Compression/Binary/Crypto/Net, GOAP/DS/LSystem/SVG)
+  "speechSynth",
+  "voiceControl",
+  "midiInput",
+  "parseMIDI",
+  "motionTrack",
+  "indexedStore",
+  "compress",
+  "decompress",
+  "binaryBuf",
+  "cryptoHash",
+  "uuid",
+  "wsClient",
+  "httpFetch",
+  "goapPlanner",
+  "quadTree",
+  "octree3D",
+  "priorityQueue",
+  "trie",
+  "lruCache",
+  "disjointSet",
+  "lSystem",
+  "svgPath",
   // Standard JS Host Builtins
   "Math",
   "Date",
@@ -818,7 +851,7 @@ var ROY_DOCS_BRANCHES = [
   { id: "genesis", range: "v1–v3", name: "Genesis", ru: "Зарождение", releases: ["v1 Spark", "v2 Canvas", "v3 Arcade"] },
   { id: "horizon", range: "v4", name: "Horizon", ru: "Горизонт", releases: ["v4 Horizon"] },
   { id: "lumen", range: "v5", name: "Lumen", ru: "Свет", releases: ["v5 Lumen"] },
-  { id: "odyssey", range: "v6.0–v6.8", name: "Odyssey", ru: "Одиссея", releases: ["v6 Chronos", "v6.1 Puppeteer", "v6.2 Atlas", "v6.3 Mirage", "v6.4 Titan", "v6.5 Forge", "v6.6 Vanguard", "v6.7 Oracle", "v6.8 Prism"] },
+  { id: "odyssey", range: "v6.0–v6.9", name: "Odyssey", ru: "Одиссея", releases: ["v6 Chronos", "v6.1 Puppeteer", "v6.2 Atlas", "v6.3 Mirage", "v6.4 Titan", "v6.5 Forge", "v6.6 Vanguard", "v6.7 Oracle", "v6.8 Prism", "v6.9 Zenith"] },
   { id: "nexus", range: "v7.0", name: "Nexus", ru: "Экосистема (в планах)", releases: ["v7.0 Nexus"] }
 ];
 var ROY_KEYWORDS = Array.from(KEYWORDS);
@@ -837,6 +870,7 @@ var ROY_DOCS_CATS = [
 ];
 var ROY_DOCS_VERSIONS = [
   { id: "all", label: "Все версии" },
+  { id: "v6.9", label: "v6.9 · Zenith", codename: "Zenith", branch: "Odyssey" },
   { id: "v6.8", label: "v6.8 · Prism", codename: "Prism", branch: "Odyssey" },
   { id: "v6.7", label: "v6.7 · Oracle", codename: "Oracle", branch: "Odyssey" },
   { id: "v6.6", label: "v6.6 · Vanguard", codename: "Vanguard", branch: "Odyssey" },
@@ -851,6 +885,12 @@ var ROY_DOCS_VERSIONS = [
   { id: "v1-v3", label: "v1–v3 · Genesis", codename: "Genesis", branch: "Genesis" }
 ];
 var ROYLANG_V3_DOCS = [
+  { "cat": "draw", "ver": "v6.9", "badge": "WebGL2 GPU & Шейдеры (v6.9)", "title": "glslShader · gpuParticles (100k+) · raymarch3D — реальный GPU-движок", "desc": "Настоящие пользовательские GLSL-шейдеры в 1 строку (glslShader с u_time/u_resolution/u_mouse/u_tex), аппаратные GPU-частицы на 100 000+ точек с аттракторами и вихрями (gpuParticles) и 3D SDF Raymarching на WebGL2 с пресетами mandelbulb, infiniteTunnel, crystalCave, torusKnot и мягкими тенями (raymarch3D).", "code": 'let sh = glslShader("fragColor = vec4(0.5 + 0.5*cos(u_time + uv.xyx + vec3(0,2,4)), 1.0);")\nlet gp = gpuParticles(100000, { gravity: 40 })\ngp.addAttractor(400, 250, 900, 120)\nlet rm = raymarch3D("mandelbulb")\n\non update(dt) { gp.emit(mouse.x, mouse.y, 120); gp.update(dt); rm.orbit(now() * 0.5) }\non draw { rm.draw(0, 0, 800, 500); gp.draw() }' },
+  { "cat": "physics", "ver": "v6.9", "badge": "Живой 3D-мир & Физика (v6.9)", "title": "physics3D · vehicle3D · pathfind3D · skybox3D · water3D", "desc": "Полноценный 3D-физический движок твёрдых тел со сферами, коробками, плоскостями, трением, импульсами и 3D-рейкастом (physics3D), аркадно-физичная 3D-машина/дрифт/ховеркрафт с подвеской (vehicle3D), 3D A* поиск пути по этажам и вокселям (pathfind3D), процедурное небо со сменой дня/ночи и облаками (skybox3D) и анимированный океан волн Герстнера с плавучестью (water3D).", "code": 'let w3 = physics3D({ gravity: -9.81 })\nw3.addPlane(0)\nlet ball = w3.addSphere(0, 6, 0, 0.5, { restitution: 0.75 })\nlet car = vehicle3D(w3, { mode: "drift", y: 1.0 })\nlet sky = skybox3D().setTimeOfDay(17.5)\nlet sea = water3D({ amplitude: 0.6 })\n\non update(dt) { w3.step(dt); car.update(dt); sky.update(dt); sea.update(dt) }\non draw { sky.draw(car.yaw); sea.draw({ x: car.x, z: car.z }) }' },
+  { "cat": "sdk", "ver": "v6.9", "badge": "Голос, MIDI & Веб-камера (v6.9)", "title": "speechSynth · voiceControl · midiInput · parseMIDI · motionTrack", "desc": "Иммерсивный ввод и озвучка без единой зависимости: голосовой синтезатор речи NPC (speechSynth), управление игрой голосовыми командами (voiceControl), подключение настоящих MIDI-клавиатур (midiInput), бинарный парсер .mid файлов SMF (parseMIDI) и оптический трекинг движения руками перед веб-камерой (motionTrack).", "code": 'let tts = speechSynth({ lang: "ru-RU", rate: 1.1 })\ntts.speak("Добро пожаловать на арену!")\nlet vc = voiceControl({ "прыжок": () => playerJump(), "щит": () => activateShield() })\nvc.start()\nlet midi = midiInput()\nmidi.onNoteOn((e) => tone(e.freq, 0.3, "sawtooth", e.velocity))\nlet cam = motionTrack()\n// await cam.start() -> cam.update(), cam.zones(3, 3), cam.centroid()' },
+  { "cat": "sdk", "ver": "v6.9", "badge": "Взрослый язык & Сеть 2.0 (v6.9)", "title": "indexedStore · compress/decompress · binaryBuf · cryptoHash · uuid · wsClient · httpFetch", "desc": "Инфраструктура для серьёзных проектов и мультиплеера: хранилище IndexedDB на сотни МБ (indexedStore), быстрое сжатие LZW/GZIP (compress/decompress), компактные бинарные пакеты (binaryBuf), синхронный SHA-256/HMAC и async SHA-512 (cryptoHash), UUID v4/v7 (uuid), WebSocket с авто-реконнектом (wsClient) и REST-клиент с таймаутами/ретраями (httpFetch).", "code": 'let db = indexedStore("my_rpg_world")\nawait db.set("chunk_0_0", compress(bigWorldData))\nlet sig = cryptoHash.hmac("secret", toJson(saveData))\nlet id = uuid(7)\nlet pkt = binaryBuf().writeU16(1).writeF32(player.x).writeStr(player.name)\nlet ws = wsClient("wss://game.example/ws", { reconnect: true, heartbeatMs: 15000 })\nlet res = await httpFetch.get("https://api.example/scores", { retries: 2, timeoutMs: 4000 })' },
+  { "cat": "physics", "ver": "v6.9", "badge": "GOAP ИИ, Алгоритмы & SVG (v6.9)", "title": "goapPlanner · quadTree · octree3D · priorityQueue · trie · lruCache · disjointSet · lSystem · svgPath", "desc": "Тактический планировщик целей ИИ уровня F.E.A.R. (goapPlanner), пространственные деревья 2D/3D (quadTree, octree3D), классические структуры данных (priorityQueue, trie, lruCache, disjointSet), процедурные L-системы для деревьев, папоротников и молний (lSystem) и парсер/морфинг векторных SVG-путей (svgPath).", "code": 'let ai = goapPlanner()\nai.addAction({ name: "findCover", cost: 1, pre: { safe: false }, eff: { safe: true } })\nai.addAction({ name: "reload", cost: 1, pre: { safe: true }, eff: { loaded: true } })\nlet plan = ai.plan({ safe: false, loaded: false }, { loaded: true })\n\nlet tree = lSystem("tree")\ntree.generate(4)\nlet logo = svgPath("M 0 0 L 80 0 C 120 0 120 80 80 80 Z")\non draw { tree.draw(200, 420); logo.draw(420, 180, { stroke: "#38bdf8" }) }' },
+  { "cat": "syntax", "ver": "v6.9", "badge": "Синтаксис Zenith (v6.9)", "title": "Декораторы @memo/@debounce/@throttle/@once/@bench · type-алиасы · плейсхолдер _ в |>", "desc": "Финальный штрих ветки Odyssey в компиляторе: встроенные и кастомные декораторы прямо над fn (@memo, @debounce(200ms), @throttle(100ms), @once, @bench), псевдонимы типов type Vec2 = { x: num, y: num } / type Id = num | str с проверкой в линтере и гибкий плейсхолдер _ в конвейере |> (включая выражения вроде 10 |> _ * 2 + 1).", "code": 'type Vec2 = { x: num, y: num }\ntype Id = num | str\n\n@memo\nfn fib(n: num) -> num { return n < 2 ? n : fib(n - 1) + fib(n - 2) }\n\n@debounce(200ms)\nfn onSearch(q: str) { log("Поиск:", q) }\n\nlet aliveX = enemies |> filter(_, e => e.hp > 0) |> map(_, e => e.x)\nlet scaled = 10 |> _ * 2 + 1' },
   { "cat": "syntax", "ver": "v6.8", "badge": "Модульность & Tree-Shaking (v6.8)", "title": "useModule · hasModule · listModules · runtimeStats (Умный Tree-Shaking)", "desc": "Модульный рантайм нового поколения: компилятор автоматически определяет, какие пакеты реально используются в игре (v66-gameplay, v66-3d, v67-core, v67-ai, v67-math, v68-prism), и вырезает всё лишнее при экспорте в HTML/ZIP/PWA — экономя свыше 600 КБ на 2D-играх! Через useModule/hasModule/listModules/runtimeStats можно управлять модулями и смотреть статистику бандла прямо в рантайме.", "code": 'useModule(["3d", "prism"]) // явное подключение пакетов\non start {\n  let st = runtimeStats()\n  log("Модули:", st.loadedModules, "Сэкономлено КБ:", st.savedKB)\n  if hasModule("v68-prism") {\n    log("Пакет Prism Optics & Workers активен!")\n  }\n}' },
   { "cat": "sdk", "ver": "v6.8", "badge": "Плагины & Расширения (v6.8)", "title": "definePlugin · usePlugin (Система плагинов движка)", "desc": "Создавайте переиспользуемые плагины для RoyLang с версиями, зависимостями (deps), хуком очистки (onCleanup) и опциональной регистрацией глобальных функций ({ global: true }). Фундамент для экосистемы модулей и масштабирования до 1500+ API.", "code": 'definePlugin("cameraFX", (ctx, cfg) => {\n  let power = cfg.power ?? 12\n  return {\n    boom() { ctx.rt.shake(power, 0.25); ctx.rt.flashScreen("#ffffff", 0.12) }\n  }\n}, { version: "1.0.0", deps: ["core"] })\n\nlet fx = usePlugin("cameraFX", { power: 18 })\nfx.boom()' },
   { "cat": "sdk", "ver": "v6.8", "badge": "Многопоточность (v6.8)", "title": "spawnWorker · parallelMap · workerPool — Web Workers в 1 строку", "desc": "Настоящие многопоточные вычисления в фоне без фризов 60 FPS: spawnWorker запускает чистую функцию в отдельном потоке (Blob Web Worker с авто-фоллбэком), parallelMap распараллеливает массив по ядрам CPU с сохранением порядка, а workerPool держит готовый пул воркеров для тяжёлой генерации миров, физики и ИИ.", "code": "on start {\n  let sum = await spawnWorker((n) => {\n    let s = 0; for (let i = 1; i <= n; i++) s += i; return s\n  }, 1000000)\n  let chunks = await parallelMap([1, 2, 3, 4], (x) => x * x, { threads: 4 })\n  let pool = workerPool(4)\n  let res = await pool.run((d) => d.a * d.b, { a: 6, b: 7 })\n  pool.terminate()\n  log(sum, chunks, res)\n}" },
@@ -2248,7 +2288,37 @@ var ROY_SIGNATURE_HINTS = {
   qrCode: { params: ["text", "opts?"], tip: "Настоящий сканируемый ISO/IEC 18004 QR-код (GF(256) Reed-Solomon, версии 1–6): .matrix, .size, .draw(x, y, px), .toDataUrl(), .toAscii()" },
   p2pRoom: { params: ["opts?"], tip: "Бессерверная P2P WebRTC-комната (RTCPeerConnection + DataChannel + ROY1-инвайт-коды + BroadcastChannel): .createOffer, .acceptOffer, .acceptAnswer, .send, .syncState, .ping, .on" },
   p2pHost: { params: ["opts?"], tip: "Хост-комната P2P-мультиплеера с реестром игроков (.players(), .playerCount(), .broadcastState(), .kick())" },
-  p2pJoin: { params: ["offerOrRoom", "opts?"], tip: "Подключение игрока к P2P-комнате по инвайт-коду ROY1:... или локальному имени комнаты" }
+  p2pJoin: { params: ["offerOrRoom", "opts?"], tip: "Подключение игрока к P2P-комнате по инвайт-коду ROY1:... или локальному имени комнаты" },
+  glslShader: { params: ["fragSrc", "opts?"], tip: "Пользовательский WebGL2/WebGL1 GLSL-шейдер (u_time, u_resolution, u_mouse, u_tex): .set(), .render(), .draw(), .dispose()" },
+  gpuParticles: { params: ["maxCountOrOpts?", "opts?"], tip: "Аппаратные GPU-частицы на 100 000+ точек (WebGL2 Point Sprites): .emit(), .burst(), .addAttractor(), .update(), .draw()" },
+  raymarch3D: { params: ["sdfOrPreset?", "opts?"], tip: 'WebGL2 3D SDF Raymarching ("sphereGrid"|"mandelbulb"|"infiniteTunnel"|"crystalCave"|"torusKnot" или свой map(vec3)): .orbit(), .setCamera(), .draw()' },
+  physics3D: { params: ["opts?"], tip: "3D-физика твёрдых тел (сферы, коробки, плоскости, трение, отскок): .addSphere(), .addBox(), .addPlane(), .applyImpulse(), .raycast(), .step()" },
+  vehicle3D: { params: ["worldOrOpts?", "opts?"], tip: "Аркадно-физичная 3D-машина / дрифт / ховеркрафт с подвеской и бустом: .update(dt, input), .speed(), .getTransform(), .reset()" },
+  pathfind3D: { params: ["gridOrOpts?", "start?", "goal?", "opts?"], tip: "3D A* поиск пути по этажам, мостам и вокселям (6/26 соседей): .find(start, goal), .setBlocked(x, y, z, bool)" },
+  skybox3D: { params: ["opts?"], tip: "Процедурное 3D-небо с солнцем, облаками и звёздами: .setTimeOfDay(hours), .setSun(elev, azim), .update(dt), .draw(yaw, pitch)" },
+  water3D: { params: ["opts?"], tip: "Анимированная 3D-вода с волнами Герстнера и плавучестью: .heightAt(x, z), .normalAt(x, z), .buoyancy(body, dt), .update(dt), .draw()" },
+  speechSynth: { params: ["textOrOpts?", "opts?"], tip: "Озвучка текста и диалогов NPC голосом через Web Speech TTS: .speak(text, opts), .stop(), .pause(), .resume(), .voices()" },
+  voiceControl: { params: ["commands?", "opts?"], tip: "Управление игрой голосовыми командами (Web Speech Recognition): .add(phrase, fn), .start(), .stop(), .simulate(phrase)" },
+  midiInput: { params: ["opts?"], tip: "Подключение реальных MIDI-клавиатур и контроллеров (Web MIDI API): await .connect(), .onNoteOn(), .onNoteOff(), .onCC(), .simulateNote()" },
+  parseMIDI: { params: ["bytesOrBase64"], tip: "Парсер стандартных .mid файлов (SMF Format 0/1) -> { tempo, durationSec, tracks, notes, play(fn?) }" },
+  motionTrack: { params: ["opts?"], tip: "Трекинг движения с веб-камеры (оптический поток / frame-diff): await .start(), .update(), .zones(cols, rows), .centroid(), .energy(), .drawOverlay()" },
+  indexedStore: { params: ["dbName?", "storeName?"], tip: "Асинхронное хранилище IndexedDB на сотни МБ для больших миров и моделей: await .set(), .get(), .delete(), .has(), .keys(), .clear(), .count()" },
+  compress: { params: ["data", "opts?"], tip: "Быстрое синхронное сжатие строк/JSON (LZW) + async compress.gzip(data) для сейвов, карт и сети" },
+  decompress: { params: ["compressed", "opts?"], tip: "Распаковка данных, сжатых compress() + async decompress.gunzip(bytes)" },
+  binaryBuf: { params: ["sizeOrBytes?"], tip: "Быстрый бинарный буфер для компактных пакетов: .writeU8/U16/U32/F32/F64/Str/Bytes, .read..., .toBytes(), .toBase64()" },
+  cryptoHash: { params: ["data", "alg?"], tip: 'Синхронный SHA-256 (64 hex) + cryptoHash.hmac(key, data) + async cryptoHash.async(data, "SHA-512")' },
+  uuid: { params: ["version?"], tip: "Генератор RFC 9562 UUID v4 (случайный) или time-ordered UUID v7: uuid() / uuid(7)" },
+  wsClient: { params: ["url", "opts?"], tip: 'WebSocket-клиент с авто-реконнектом, очередью и heartbeat: .send(), .on("open"|"message"|"close"|"error"), .close()' },
+  httpFetch: { params: ["url", "opts?"], tip: "REST-клиент с таймаутами, ретраями и query-параметрами: await httpFetch(url, opts) или .get/.post/.put/.delete" },
+  goapPlanner: { params: ["opts?"], tip: "Тактический A* планировщик целей ИИ (GOAP): .addAction({ name, cost, pre, eff, run }), .plan(state, goal), .execute(state, goal)" },
+  quadTree: { params: ["bounds", "opts?"], tip: "2D пространственный индекс QuadTree для тысяч объектов: .insert(), .query(rectOrCircle), .nearest(x, y), .remove(), .draw()" },
+  octree3D: { params: ["bounds", "opts?"], tip: "3D пространственный индекс Octree3D: .insert(), .queryBox(box), .querySphere(x, y, z, r), .clear()" },
+  priorityQueue: { params: ["cmpFn?"], tip: "Бинарная куча (Min/Max Priority Queue): .push(item, prio?), .pop(), .peek(), .size, .isEmpty(), .toArray()" },
+  trie: { params: ["words?"], tip: "Префиксное дерево Trie для словарей и автодополнения: .insert(), .has(), .get(), .startsWith(prefix), .delete()" },
+  lruCache: { params: ["maxSize?", "opts?"], tip: "O(1) LRU-кэш с вытеснением и опциональным TTL: .get(), .set(), .has(), .delete(), .keys(), .stats()" },
+  disjointSet: { params: ["items?"], tip: "Система непересекающихся множеств (Union-Find DSU): .makeSet(), .find(), .union(), .connected(), .groupSize(), .groups()" },
+  lSystem: { params: ["axiomOrPreset", "rules?", "opts?"], tip: 'Процедурные L-системы ("tree"|"fern"|"bush"|"dragon"|"koch"|"lightning") и черепашья графика: .generate(n), .toSegments(), .draw(x, y)' },
+  svgPath: { params: ["dString"], tip: "Парсер, измерение и морфинг векторных SVG-путей (M/L/H/V/C/Q/Z): .length, .pointAt(t), .tangentAt(t), .sample(n), .morph(other, t), .draw()" }
 };
 function resolveRoySignatureHint(textBeforeCursor) {
   const s = String(textBeforeCursor || "");
@@ -3001,7 +3071,39 @@ var ROY_DOCS_INDEX = [
   { "name": "qrCode", "kind": "Функция", "cat": "gfx", "ver": "v6.8", "sig": 'qrCode(text, { ecLevel: "L"|"M" }) -> { matrix, size, draw(x, y, px), toDataUrl(), toAscii() }', "desc": "Настоящий сканируемый ISO/IEC 18004 QR-код (GF(256) Reed-Solomon, версии 1–6) с отрисовкой на холсте и экспортом в PNG." },
   { "name": "p2pRoom", "kind": "Функция", "cat": "sdk", "ver": "v6.8", "sig": "p2pRoom({ room? }).createOffer / .acceptOffer / .acceptAnswer / .send / .syncState / .ping / .on", "desc": "Бессерверный P2P-мультиплеер поверх WebRTC DataChannel с инвайт-кодами ROY1:... и локальным режимом BroadcastChannel." },
   { "name": "p2pHost", "kind": "Функция", "cat": "sdk", "ver": "v6.8", "sig": "p2pHost({ room? }) -> { players(), playerCount(), broadcastState(s), kick(id), ... }", "desc": "Хост-комната P2P-мультиплеера с реестром игроков и широковещательной синхронизацией состояния мира." },
-  { "name": "p2pJoin", "kind": "Функция", "cat": "sdk", "ver": "v6.8", "sig": "p2pJoin(offerCodeOrRoomName, opts?) -> room", "desc": "Подключает клиента к P2P-комнате по инвайт-коду ROY1:... или имени локальной комнаты." }
+  { "name": "p2pJoin", "kind": "Функция", "cat": "sdk", "ver": "v6.8", "sig": "p2pJoin(offerCodeOrRoomName, opts?) -> room", "desc": "Подключает клиента к P2P-комнате по инвайт-коду ROY1:... или имени локальной комнаты." },
+  { "name": "@decorator", "kind": "Синтаксис", "cat": "syntax", "ver": "v6.9", "sig": "@memo / @debounce(200ms) / @throttle(100ms) / @once / @bench fn f() {}", "desc": "Декораторы функций над fn и export fn: встроенные мемоизация, дебаунс, троттлинг, однократный вызов, бенчмарк и любые пользовательские декораторы." },
+  { "name": "type", "kind": "Синтаксис", "cat": "syntax", "ver": "v6.9", "sig": "type Vec2 = { x: num, y: num } / type Id = num | str", "desc": "Объявляет псевдоним типа с проверкой совместимости объектов и объединений в статическом анализаторе RoyLang." },
+  { "name": "glslShader", "kind": "Функция", "cat": "fx", "ver": "v6.9", "sig": "glslShader(fragSrc, { uniforms, width, height }).set() / .render() / .draw()", "desc": "Компилирует и рендерит пользовательский WebGL2/WebGL1 GLSL фрагментный шейдер поверх холста с u_time, u_resolution, u_mouse и u_tex." },
+  { "name": "gpuParticles", "kind": "Функция", "cat": "fx", "ver": "v6.9", "sig": "gpuParticles(100000, { gravity, drag, vortex }).emit() / .addAttractor() / .update() / .draw()", "desc": "Высокопроизводительные WebGL2 GPU-частицы (100 000+ точек на 60 FPS) с гравитацией, аттракторами, вихрями и авто-фоллбэком на Canvas2D." },
+  { "name": "raymarch3D", "kind": "Функция", "cat": "fx", "ver": "v6.9", "sig": 'raymarch3D("mandelbulb"|"infiniteTunnel"|"crystalCave"|"torusKnot"|sdfGlsl).orbit() / .draw()', "desc": "Настоящий 3D SDF Raymarching на WebGL2: фракталы, бесконечные туннели и пещеры с мягкими тенями и туманом без полигонов." },
+  { "name": "physics3D", "kind": "Функция", "cat": "physics", "ver": "v6.9", "sig": "physics3D({ gravity }).addSphere() / .addBox() / .addPlane() / .raycast() / .step(dt)", "desc": "Полноценный 3D-физический движок твёрдых тел со столкновениями, трением, упругостью, импульсами и 3D-рейкастом." },
+  { "name": "vehicle3D", "kind": "Функция", "cat": "physics", "ver": "v6.9", "sig": 'vehicle3D(world?, { mode: "car"|"drift"|"hover" }).update(dt, input) / .speed() / .getTransform()', "desc": "Аркадно-физичный контроллер 3D-автомобиля, дрифт-кара или ховеркрафта с пружинной подвеской и бустом." },
+  { "name": "pathfind3D", "kind": "Функция", "cat": "physics", "ver": "v6.9", "sig": "pathfind3D(gridOrOpts?).find(start, goal) / .setBlocked(x, y, z, bool)", "desc": "Трёхмерный A* поиск пути по этажам, мостам, вокселям и в воздухе с поддержкой 6 и 26 направлений." },
+  { "name": "skybox3D", "kind": "Функция", "cat": "draw", "ver": "v6.9", "sig": "skybox3D({ clouds, stars }).setTimeOfDay(hours) / .update(dt) / .draw(yaw, pitch)", "desc": "Процедурный 3D-скайбокс с динамическим солнцем, закатами, мерцающими звёздами и плывущими облаками." },
+  { "name": "water3D", "kind": "Функция", "cat": "fx", "ver": "v6.9", "sig": "water3D({ level, amplitude, speed }).heightAt(x, z) / .normalAt(x, z) / .buoyancy(body, dt) / .draw()", "desc": "Анимированный 3D-океан с волнами Герстнера, вычислением нормалей и физической плавучестью тел." },
+  { "name": "speechSynth", "kind": "Функция", "cat": "audio", "ver": "v6.9", "sig": "speechSynth(textOrOpts?, { lang, rate, pitch }).speak() / .stop() / .voices()", "desc": "Голосовой синтезатор речи (Web Speech TTS) для озвучки диалогов NPC и событий с настройкой тона и скорости." },
+  { "name": "voiceControl", "kind": "Функция", "cat": "input", "ver": "v6.9", "sig": 'voiceControl({ "прыжок": fn }).start() / .stop() / .add() / .simulate()', "desc": "Распознавание голосовых команд микрофона через Web Speech Recognition API для управления игрой голосом." },
+  { "name": "midiInput", "kind": "Функция", "cat": "input", "ver": "v6.9", "sig": "midiInput().connect() / .onNoteOn(fn) / .onNoteOff(fn) / .onCC(fn) / .simulateNote()", "desc": "Подключение реальных аппаратных MIDI-клавиатур и синтезаторов через Web MIDI API." },
+  { "name": "parseMIDI", "kind": "Функция", "cat": "audio", "ver": "v6.9", "sig": "parseMIDI(bytesOrBase64) -> { tempo, durationSec, tracks, notes, play(fn?) }", "desc": "Бинарный парсер стандартных MIDI-файлов (SMF Format 0/1) с декодированием темпа, треков, нот и проигрыванием." },
+  { "name": "motionTrack", "kind": "Функция", "cat": "input", "ver": "v6.9", "sig": "motionTrack({ threshold }).start() / .update() / .zones(3, 3) / .centroid() / .energy() / .drawOverlay()", "desc": "Оптический трекер движения с веб-камеры для интерактивных игр в духе Kinect и Fruit Ninja." },
+  { "name": "indexedStore", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": "indexedStore(dbName?).set(k, v) / .get(k) / .delete(k) / .keys() / .count()", "desc": "Асинхронное хранилище IndexedDB на сотни мегабайт для огромных миров, медиа и обученных моделей (с авто-фоллбэком в памяти)." },
+  { "name": "compress", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": "compress(strOrObj) / await compress.gzip(data)", "desc": "Синхронное LZW-сжатие строк и JSON-объектов + асинхронное GZIP-сжатие для компактных сейвов и сетевых пакетов." },
+  { "name": "decompress", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": "decompress(packed) / await decompress.gunzip(bytes)", "desc": "Мгновенно распаковывает строки, JSON и бинарные буферы, сжатые с помощью compress() / compress.gzip()." },
+  { "name": "binaryBuf", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": "binaryBuf(sizeOrBytes?).writeU16/.writeF32/.writeStr -> .read... / .toBytes() / .toBase64()", "desc": "Авторасширяемый бинарный буфер (DataView) для компактной сериализации мультиплеерных пакетов в 10 раз меньше JSON." },
+  { "name": "cryptoHash", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": 'cryptoHash(data) / cryptoHash.hmac(key, data) / await cryptoHash.async(data, "SHA-512")', "desc": "Настоящий синхронный SHA-256 (FIPS 180-4), HMAC-SHA256 для подписи сейвов/античита и асинхронный SHA-512." },
+  { "name": "uuid", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": "uuid() / uuid(7)", "desc": "Генератор уникальных идентификаторов RFC 9562: случайный UUID v4 и сортируемый по времени UUID v7." },
+  { "name": "wsClient", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": 'wsClient(url, { reconnect, heartbeatMs }).send() / .on("message", fn) / .close()', "desc": "Устойчивый WebSocket-клиент с автоматическим переподключением, экспоненциальной задержкой, очередью сообщений и авто-JSON." },
+  { "name": "httpFetch", "kind": "Функция", "cat": "sdk", "ver": "v6.9", "sig": "await httpFetch(url, { timeoutMs, retries, query, json }) / .get / .post / .put / .delete", "desc": "Удобный REST/HTTP-клиент с таймаутами AbortController, автоматическими повторами и разбором JSON." },
+  { "name": "goapPlanner", "kind": "Функция", "cat": "physics", "ver": "v6.9", "sig": "goapPlanner().addAction({ name, cost, pre, eff }).plan(state, goal) / .execute()", "desc": "Тактический A* планировщик целей ИИ (Goal-Oriented Action Planning): агенты сами строят оптимальную цепочку действий к цели." },
+  { "name": "quadTree", "kind": "Функция", "cat": "physics", "ver": "v6.9", "sig": "quadTree({ x, y, w, h }).insert() / .query() / .nearest() / .remove() / .draw()", "desc": "2D пространственное дерево QuadTree для быстрого поиска столкновений и соседей среди тысяч объектов." },
+  { "name": "octree3D", "kind": "Функция", "cat": "physics", "ver": "v6.9", "sig": "octree3D({ x, y, z, w, h, d }).insert() / .queryBox() / .querySphere()", "desc": "3D пространственное дерево Octree для ускорения 3D-запросов в объёмах и сферах." },
+  { "name": "priorityQueue", "kind": "Функция", "cat": "collections", "ver": "v6.9", "sig": "priorityQueue(cmpFn?).push(item, prio?) / .pop() / .peek() / .size", "desc": "Бинарная куча с приоритетами за O(log n) для алгоритмов поиска пути, планировщиков событий и олимпиадных задач." },
+  { "name": "trie", "kind": "Функция", "cat": "collections", "ver": "v6.9", "sig": "trie(words?).insert() / .has() / .get() / .startsWith(prefix) / .delete()", "desc": "Префиксное дерево (бор) для мгновенного автодополнения текста, чата, команд и словарей." },
+  { "name": "lruCache", "kind": "Функция", "cat": "collections", "ver": "v6.9", "sig": "lruCache(maxSize?, { ttlMs }).get() / .set() / .has() / .stats()", "desc": "Кэш с политикой вытеснения Least Recently Used за O(1) и опциональным временем жизни записей (TTL)." },
+  { "name": "disjointSet", "kind": "Функция", "cat": "collections", "ver": "v6.9", "sig": "disjointSet(items?).union(a, b) / .find(x) / .connected(a, b) / .groups()", "desc": "Структура Union-Find (СНМ) со сжатием путей и ранговой эвристикой для компонент связности, лабиринтов и графов." },
+  { "name": "lSystem", "kind": "Функция", "cat": "draw", "ver": "v6.9", "sig": 'lSystem("tree"|"fern"|"dragon"|"koch"|"lightning").generate(n) / .toSegments() / .draw(x, y)', "desc": "Процедурные L-системы Линденмайера с черепашьей графикой для генерации деревьев, растений, фракталов и молний." },
+  { "name": "svgPath", "kind": "Функция", "cat": "draw", "ver": "v6.9", "sig": 'svgPath("M 0 0 L 100 0 C ...").length / .pointAt(t) / .tangentAt(t) / .morph(other, t) / .draw()', "desc": "Парсер, измерение длины, сэмплинг, плавный морфинг и отрисовка векторных SVG-путей (M/L/H/V/C/Q/Z)." }
 ];
 var docs_default = {
   ROY_DOCS_VERSION,
